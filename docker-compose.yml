@@ -19,13 +19,13 @@ x-backend-env: &backend-env
   SMOKESCREEN_OPTS: ${SMOKESCREEN_OPTS:-}
 
 x-backend-deps: &backend-deps
-  cvat_redis_inmem_everex:
+  cvat_redis_inmem:
     condition: service_started
-  cvat_redis_ondisk_everex:
+  cvat_redis_ondisk:
     condition: service_started
-  cvat_db_everex:
+  cvat_db:
     condition: service_started
-  cvat_clickhouse_everex:
+  cvat_clickhouse:
     condition: service_started
 
 x-clickhouse-env: &clickhouse-env
