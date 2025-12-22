@@ -5,6 +5,9 @@
 
 set -e
 
+echo "Pulling latest changes..."
+git pull
+
 export CVAT_VERSION=dev
 
 echo "Rebuilding and deploying CVAT development stack..."
