@@ -1149,7 +1149,17 @@ export default (state = defaultState, action: AnyAction): AnnotationState => {
                 },
             };
         }
-        case AnnotationActionTypes.CLOSE_JOB:
+        case AnnotationActionTypes.CLOSE_JOB: {
+            // Preserve activeInitialState to maintain copy/paste state between jobs
+            const { activeInitialState } = state.drawing;
+            return {
+                ...defaultState,
+                drawing: {
+                    ...defaultState.drawing,
+                    activeInitialState,
+                },
+            };
+        }
         case AuthActionTypes.LOGOUT_SUCCESS: {
             return defaultState;
         }
