@@ -3,10 +3,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-name: cvat
+name: cvat-everex
 
 x-backend-env: &backend-env
-  CVAT_POSTGRES_HOST: cvat_db
+  CVAT_POSTGRES_HOST: cvat_db_everex
   CVAT_REDIS_INMEM_HOST: cvat_redis_inmem_everex
   CVAT_REDIS_INMEM_PORT: 6379
   CVAT_REDIS_ONDISK_HOST: cvat_redis_ondisk_everex
@@ -19,24 +19,24 @@ x-backend-env: &backend-env
   SMOKESCREEN_OPTS: ${SMOKESCREEN_OPTS:-}
 
 x-backend-deps: &backend-deps
-  cvat_redis_inmem:
+  cvat_redis_inmem_everex:
     condition: service_started
-  cvat_redis_ondisk:
+  cvat_redis_ondisk_everex:
     condition: service_started
-  cvat_db:
+  cvat_db_everex:
     condition: service_started
-  cvat_clickhouse:
+  cvat_clickhouse_everex:
     condition: service_started
 
 x-clickhouse-env: &clickhouse-env
-  CLICKHOUSE_HOST: clickhouse_everex
+  CLICKHOUSE_HOST: clickhouse
   CLICKHOUSE_PORT: 8123
   CLICKHOUSE_DB: cvat
   CLICKHOUSE_USER: user
   CLICKHOUSE_PASSWORD: user
 
 services:
-  cvat_db:
+  cvat_db_everex:
     container_name: cvat_db_everex
     image: postgres:15-alpine
     restart: always
@@ -47,9 +47,9 @@ services:
     volumes:
       - cvat_db:/var/lib/postgresql/data
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_redis_inmem:
+  cvat_redis_inmem_everex:
     container_name: cvat_redis_inmem_everex
     image: redis:7.2.11-alpine
     restart: always
@@ -61,9 +61,9 @@ services:
     volumes:
       - cvat_inmem_db:/data
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_redis_ondisk:
+  cvat_redis_ondisk_everex:
     container_name: cvat_redis_ondisk_everex
     image: apache/kvrocks:2.12.1
     restart: always
@@ -74,22 +74,21 @@ services:
     # Use a separate init process as a workaround.
     init: true
     volumes:
-      - cvat_cache_db:/var/lib/kvrocks
+      - cvat_cache_db:/var/lib/kvrocks/data
     networks:
-      - cvat
+      - cvat_everex
     command: [
       "--compact-cron", "0 3 * * *",
       ]
 
-  cvat_server:
+  cvat_server_everex:
     container_name: cvat_server_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
     depends_on:
       <<: *backend-deps
-      cvat_opa:
-        condition:
-          service_started
+      cvat_opa_everex:
+        condition: service_started
     environment:
       <<: [*backend-env, *clickhouse-env]
       DJANGO_MODWSGI_EXTRA_ARGS: ''
@@ -99,25 +98,27 @@ services:
       CVAT_ANALYTICS: 1
       CVAT_BASE_URL:
       ONE_RUNNING_JOB_IN_QUEUE_PER_USER:
+      CSRF_TRUSTED_ORIGINS: https://cvat-everex.mora.center,http://192.168.1.101:8081
     command: init run server
     labels:
       traefik.enable: "true"
-      traefik.http.services.cvat.loadbalancer.server.port: "8080"
-      traefik.http.routers.cvat.rule:
-        Host(`${CVAT_HOST:-localhost}`) &&
+      traefik.http.services.cvat-everex.loadbalancer.server.port: "8080"
+      traefik.http.routers.cvat-everex.rule:
+        (Host(`cvat-everex.mora.center`) || Host(`192.168.1.101`)) &&
         (PathPrefix(`/api/`) || PathPrefix(`/static/`) || PathPrefix(`/admin`)
           || PathPrefix(`/django-rq`))
-      traefik.http.routers.cvat.entrypoints: web
+      traefik.http.routers.cvat-everex.entrypoints: web
     volumes:
       - cvat_data:/home/django/data
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
+      - ./cvat/settings/base.py:/home/django/cvat/settings/base.py:ro
     networks:
-      cvat:
+      cvat_everex:
         aliases:
           - cvat-server
 
-  cvat_worker_utils:
+  cvat_worker_utils_everex:
     container_name: cvat_worker_utils_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -132,9 +133,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_import:
+  cvat_worker_import_everex:
     container_name: cvat_worker_import_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -148,9 +149,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_export:
+  cvat_worker_export_everex:
     container_name: cvat_worker_export_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -164,9 +165,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_annotation:
+  cvat_worker_annotation_everex:
     container_name: cvat_worker_annotation_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -180,9 +181,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_webhooks:
+  cvat_worker_webhooks_everex:
     container_name: cvat_worker_webhooks_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -196,9 +197,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_quality_reports:
+  cvat_worker_quality_reports_everex:
     container_name: cvat_worker_quality_reports_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -212,9 +213,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_chunks:
+  cvat_worker_chunks_everex:
     container_name: cvat_worker_chunks_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -228,9 +229,9 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_worker_consensus:
+  cvat_worker_consensus_everex:
     container_name: cvat_worker_consensus_everex
     image: cvat/server:${CVAT_VERSION:-v2.52.0}
     restart: always
@@ -244,23 +245,23 @@ services:
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
     networks:
-      - cvat
+      - cvat_everex
 
-  cvat_ui:
+  cvat_ui_everex:
     container_name: cvat_ui_everex
     image: cvat/ui:${CVAT_VERSION:-v2.52.0}
     restart: always
     depends_on:
-      - cvat_server
+      - cvat_server_everex
     labels:
       traefik.enable: "true"
-      traefik.http.services.cvat-ui.loadbalancer.server.port: "8000"
-      traefik.http.routers.cvat-ui.rule: Host(`${CVAT_HOST:-localhost}`)
-      traefik.http.routers.cvat-ui.entrypoints: web
+      traefik.http.services.cvat-ui-everex.loadbalancer.server.port: "8000"
+      traefik.http.routers.cvat-ui-everex.rule: Host(`cvat-everex.mora.center`) || Host(`192.168.1.101`)
+      traefik.http.routers.cvat-ui-everex.entrypoints: web
     networks:
-      - cvat
+      - cvat_everex
 
-  traefik:
+  traefik_everex:
     image: traefik:v3.6
     container_name: traefik_everex
     restart: always
@@ -289,7 +290,7 @@ services:
       TRAEFIK_LOG_FORMAT: json
       TRAEFIK_ENTRYPOINTS_web_ADDRESS: :8080
       TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: "false"
-      TRAEFIK_PROVIDERS_DOCKER_NETWORK: cvat
+      TRAEFIK_PROVIDERS_DOCKER_NETWORK: cvat-everex_cvat_everex
       TRAEFIK_PROVIDERS_FILE_DIRECTORY: /etc/traefik/rules
     # Uncomment to get Traefik dashboard
     #   TRAEFIK_API_DASHBOARD: "true"
@@ -303,19 +304,19 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./components/analytics/grafana_conf.yml:/etc/traefik/rules/grafana_conf.yml:ro
     networks:
-      - cvat
+      - cvat_everex
     logging:
       driver: "json-file"
       options:
         max-size: 100m
         max-file: "10"
 
-  cvat_opa:
+  cvat_opa_everex:
     container_name: cvat_opa_everex
     image: openpolicyagent/opa:0.63.0
     restart: always
     networks:
-      cvat:
+      cvat_everex:
         aliases:
           - opa
     command:
@@ -328,30 +329,30 @@ services:
       - --set=bundles.cvat.polling.min_delay_seconds=5
       - --set=bundles.cvat.polling.max_delay_seconds=15
 
-  cvat_clickhouse:
+  cvat_clickhouse_everex:
     container_name: cvat_clickhouse_everex
     image: clickhouse/clickhouse-server:23.11-alpine
     restart: "always"
     environment:
       <<: *clickhouse-env
     networks:
-      cvat:
+      cvat_everex:
         aliases:
           - clickhouse
     volumes:
       - cvat_events_db:/var/lib/clickhouse/
 
-  cvat_vector:
+  cvat_vector_everex:
     container_name: cvat_vector_everex
     image: timberio/vector:0.26.0-alpine
     user: "1000:1000" # Workaround for <https://github.com/vectordotdev/vector/issues/1599>.
     restart: always
     depends_on:
-      - cvat_clickhouse
+      - cvat_clickhouse_everex
     environment:
       <<: *clickhouse-env
     networks:
-      cvat:
+      cvat_everex:
         aliases:
           - vector
     volumes:
@@ -362,7 +363,7 @@ services:
       - type: tmpfs
         target: /vector-data-dir
 
-  cvat_grafana:
+  cvat_grafana_everex:
     image: grafana/grafana-oss:10.1.2
     restart: always
     container_name: cvat_grafana_everex
@@ -413,18 +414,54 @@ services:
         EOF
         exec /run.sh
     networks:
-      cvat:
+      cvat_everex:
         aliases:
           - grafana
 
 volumes:
   cvat_db:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_db/_data
+      o: bind
+
   cvat_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_data/_data
+      o: bind
+
   cvat_keys:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_keys/_data
+      o: bind
+
   cvat_logs:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_logs/_data
+      o: bind
+
   cvat_inmem_db:
+
   cvat_events_db:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_events_db/_data
+      o: bind
+
   cvat_cache_db:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/ssd/cvat_latest/cvat-2121_cvat_cache_db/_data
+      o: bind
 
 networks:
-  cvat:
+  cvat_everex:
