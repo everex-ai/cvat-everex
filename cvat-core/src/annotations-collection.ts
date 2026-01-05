@@ -68,6 +68,8 @@ export default class Collection {
         dimension: DimensionType;
         framesInfo: BasicInjection['framesInfo'];
         jobType: JobType;
+        jobId?: number;
+        taskId?: number;
     }) {
         this.stopFrame = data.stopFrame;
 
@@ -102,6 +104,8 @@ export default class Collection {
             nextClientID: () => ++config.globalObjectsCounter,
             getMasksOnFrame: (frame: number) => (this.shapes[frame] as MaskShape[])
                 .filter((object) => object instanceof MaskShape),
+            jobId: data.jobId,
+            taskId: data.taskId,
         };
     }
 

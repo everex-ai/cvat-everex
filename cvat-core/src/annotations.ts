@@ -111,6 +111,8 @@ async function getAnnotationsFromServer(session: Job | Task): Promise<void> {
                 }, {}),
             },
             history,
+            jobId: session instanceof Job ? session.id : undefined,
+            taskId: session instanceof Job ? session.taskId : session.id,
         });
 
         // eslint-disable-next-line no-unsanitized/method

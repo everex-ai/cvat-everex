@@ -12,9 +12,10 @@ import {
 } from './exceptions';
 import { Label } from './labels';
 import {
-    colors, Source, ShapeType, ObjectType, HistoryActions, DimensionType, JobType,
+    colors, Source, ShapeType, ObjectType, HistoryActions, DimensionType, JobType, EventScope,
 } from './enums';
 import AnnotationHistory from './annotations-history';
+import logger from './logger';
 import { SerializedShape, SerializedTrack, SerializedTag } from './server-response-types';
 import {
     checkNumberOfPoints, attrsAsAnObject, checkShapeArea, mask2Rle, rle2Mask,
@@ -78,6 +79,8 @@ export interface BasicInjection {
     jobType: JobType;
     nextClientID: () => number;
     getMasksOnFrame: (frame: number) => MaskShape[];
+    jobId?: number;
+    taskId?: number;
 }
 
 type AnnotationInjection = BasicInjection & {
@@ -96,6 +99,8 @@ class Annotation {
     protected parentID: number | null;
     protected dimension: DimensionType;
     protected jobType: JobType;
+    protected jobId: number | null;
+    protected taskId: number | null;
     public group: number;
     public label: Label;
     public frame: number;
@@ -119,6 +124,8 @@ class Annotation {
         this.serverID = data.id || null;
         this.parentID = injection.parentID || null;
         this.dimension = injection.dimension;
+        this.jobId = injection.jobId || null;
+        this.taskId = injection.taskId || null;
         this.group = data.group;
         this.label = this.taskLabels[data.label_id];
         this.frame = data.frame;
@@ -1213,6 +1220,22 @@ export class Track extends Drawn {
 
         this.shapes[frame] = redoShape;
         this.source = redoSource;
+
+        // Log implicit keyframe creation
+        if (!wasKeyframe) {
+            logger.log(EventScope.debugInfo, {
+                debug_type: 'implicit_keyframe_created',
+                trigger: 'savePoints',
+                job_id: this.jobId,
+                task_id: this.taskId,
+                clientID: this.clientID,
+                serverID: this.serverID,
+                frame,
+                keyframes: Object.keys(this.shapes).map(Number).sort((a, b) => a - b).join(','),
+                label: this.label?.name || 'unknown',
+            });
+        }
+
         this.appendShapeActionToHistory(
             HistoryActions.CHANGED_POINTS,
             frame,
@@ -1234,6 +1257,23 @@ export class Track extends Drawn {
 
         this.shapes[frame] = redoShape;
         this.source = redoSource;
+
+        // Log implicit keyframe creation
+        if (!wasKeyframe) {
+            logger.log(EventScope.debugInfo, {
+                debug_type: 'implicit_keyframe_created',
+                trigger: 'saveOutside',
+                job_id: this.jobId,
+                task_id: this.taskId,
+                clientID: this.clientID,
+                serverID: this.serverID,
+                frame,
+                outside,
+                keyframes: Object.keys(this.shapes).map(Number).sort((a, b) => a - b).join(','),
+                label: this.label?.name || 'unknown',
+            });
+        }
+
         this.appendShapeActionToHistory(
             HistoryActions.CHANGED_OUTSIDE,
             frame,
@@ -1255,6 +1295,23 @@ export class Track extends Drawn {
 
         this.shapes[frame] = redoShape;
         this.source = redoSource;
+
+        // Log implicit keyframe creation
+        if (!wasKeyframe) {
+            logger.log(EventScope.debugInfo, {
+                debug_type: 'implicit_keyframe_created',
+                trigger: 'saveOccluded',
+                job_id: this.jobId,
+                task_id: this.taskId,
+                clientID: this.clientID,
+                serverID: this.serverID,
+                frame,
+                occluded,
+                keyframes: Object.keys(this.shapes).map(Number).sort((a, b) => a - b).join(','),
+                label: this.label?.name || 'unknown',
+            });
+        }
+
         this.appendShapeActionToHistory(
             HistoryActions.CHANGED_OCCLUDED,
             frame,
@@ -1288,6 +1345,7 @@ export class Track extends Drawn {
 
     protected saveKeyframe(frame: number, keyframe: boolean): void {
         const wasKeyframe = frame in this.shapes;
+        const keyframesBefore = Object.keys(this.shapes).map(Number).sort((a, b) => a - b);
 
         if ((keyframe && wasKeyframe) || (!keyframe && !wasKeyframe)) {
             return;
@@ -1304,6 +1362,23 @@ export class Track extends Drawn {
         } else {
             delete this.shapes[frame];
         }
+
+        const keyframesAfter = Object.keys(this.shapes).map(Number).sort((a, b) => a - b);
+
+        // Log keyframe changes for debugging
+        logger.log(EventScope.debugInfo, {
+            debug_type: 'keyframe_change',
+            action: keyframe ? 'add' : 'remove',
+            job_id: this.jobId,
+            task_id: this.taskId,
+            clientID: this.clientID,
+            serverID: this.serverID,
+            frame,
+            wasKeyframe,
+            keyframesBefore: keyframesBefore.join(','),
+            keyframesAfter: keyframesAfter.join(','),
+            label: this.label?.name || 'unknown',
+        });
 
         this.appendShapeActionToHistory(
             HistoryActions.CHANGED_KEYFRAME,
@@ -1324,6 +1399,11 @@ export class Track extends Drawn {
         for (const readOnlyField of this.readOnlyFields) {
             updated[readOnlyField] = false;
         }
+
+        // Capture state before save for debugging keyframe issues
+        const keyframesBefore = Object.keys(this.shapes).map(Number).sort((a, b) => a - b);
+        const hasKeyframeRelatedUpdates = updated.points || updated.outside ||
+            updated.occluded || updated.rotation || updated.zOrder || updated.keyframe;
 
         const fittedPoints = this.validateStateBeforeSave(data, updated, frame);
         const { rotation } = data;
@@ -1378,6 +1458,32 @@ export class Track extends Drawn {
 
         if (updated.keyframe) {
             this.saveKeyframe(frame, data.keyframe);
+        }
+
+        // Log keyframe state changes after save
+        const keyframesAfter = Object.keys(this.shapes).map(Number).sort((a, b) => a - b);
+        if (hasKeyframeRelatedUpdates) {
+            const keyframesBeforeStr = keyframesBefore.join(',');
+            const keyframesAfterStr = keyframesAfter.join(',');
+            if (keyframesBeforeStr !== keyframesAfterStr) {
+                logger.log(EventScope.debugInfo, {
+                    debug_type: 'track_save_keyframe_changed',
+                    job_id: this.jobId,
+                    task_id: this.taskId,
+                    clientID: this.clientID,
+                    serverID: this.serverID,
+                    frame,
+                    keyframesBefore: keyframesBeforeStr,
+                    keyframesAfter: keyframesAfterStr,
+                    updateFlags_points: updated.points,
+                    updateFlags_outside: updated.outside,
+                    updateFlags_occluded: updated.occluded,
+                    updateFlags_keyframe: updated.keyframe,
+                    data_keyframe: data.keyframe,
+                    data_outside: data.outside,
+                    label: this.label?.name || 'unknown',
+                });
+            }
         }
 
         this.updateTimestamp(updated);
