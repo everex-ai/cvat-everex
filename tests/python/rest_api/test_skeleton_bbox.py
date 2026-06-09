@@ -5,11 +5,12 @@
 """Tests for the skeleton bbox field (xtl/ytl/xbr/ybr) on LabeledShape and TrackedShape.
 
 Covers:
-- POST: skeleton requires bbox; non-skeleton must not have bbox.
-- PATCH: same validation applies on update paths.
-- Degenerate state [0,0,0,0] is allowed for skeleton.
-- Zero-area / inverted / non-4-element bbox is rejected.
-- Old SDK / old client write paths break on skeleton (intentional R7 narrowing).
+- POST/PATCH: skeleton bbox is optional. Omitted or empty [] is the
+  "not yet persisted" state (accepted); non-skeleton must not carry bbox.
+- Normal [xtl,ytl,xbr,ybr] (xtl<xbr, ytl<ybr) and degenerate [0,0,0,0] are accepted.
+- Zero-area-non-degenerate / inverted / non-4-element bbox is rejected.
+- Old SDK / old client write paths stay compatible (bbox optional — migration 0098
+  does not backfill; empty bbox is derived from keypoints on the fly).
 - Read paths remain compatible (responses always carry bbox key for skeleton).
 """
 
@@ -138,8 +139,10 @@ class TestSkeletonBbox:
         assert shapes[0]["type"] == "skeleton"
         assert shapes[0]["bbox"] == [10.0, 20.0, 100.0, 200.0]
 
-    def test_create_skeleton_without_bbox_is_rejected(self, skeleton_task):
-        """Covers R7 breaking change: skeleton POST must carry bbox."""
+    def test_create_skeleton_without_bbox_is_accepted(self, skeleton_task):
+        """Omitting bbox is allowed: the skeleton is stored with an empty
+        (not-yet-persisted) bbox and the canvas/export derive a fitted rect from
+        keypoints. Keeps old SDK/client write paths backward-compatible."""
         job_id, label_ids = skeleton_task
         payload = {
             "shapes": [self._skeleton_shape(label_ids, bbox=None)],
@@ -150,10 +153,16 @@ class TestSkeletonBbox:
         response = patch_method(
             self._USERNAME, f"jobs/{job_id}/annotations", payload, action="create"
         )
-        assert response.status_code == HTTPStatus.BAD_REQUEST
+        assert response.status_code == HTTPStatus.OK
 
-    def test_create_skeleton_with_empty_bbox_is_rejected(self, skeleton_task):
-        """Empty bbox is explicitly forbidden for skeleton."""
+        response = get_method(self._USERNAME, f"jobs/{job_id}/annotations")
+        shapes = response.json()["shapes"]
+        assert len(shapes) == 1
+        assert shapes[0]["type"] == "skeleton"
+        assert shapes[0].get("bbox", []) == []
+
+    def test_create_skeleton_with_empty_bbox_is_accepted(self, skeleton_task):
+        """Explicit empty bbox [] is the 'not yet persisted' state — accepted, stored as []."""
         job_id, label_ids = skeleton_task
         payload = {
             "shapes": [self._skeleton_shape(label_ids, bbox=[])],
@@ -164,7 +173,11 @@ class TestSkeletonBbox:
         response = patch_method(
             self._USERNAME, f"jobs/{job_id}/annotations", payload, action="create"
         )
-        assert response.status_code == HTTPStatus.BAD_REQUEST
+        assert response.status_code == HTTPStatus.OK
+
+        response = get_method(self._USERNAME, f"jobs/{job_id}/annotations")
+        shapes = response.json()["shapes"]
+        assert shapes[0].get("bbox", []) == []
 
     def test_create_skeleton_with_inverted_bbox_is_rejected(self, skeleton_task):
         """xbr<xtl or ybr<ytl is rejected."""
@@ -195,7 +208,7 @@ class TestSkeletonBbox:
         assert response.status_code == HTTPStatus.BAD_REQUEST
 
     def test_create_skeleton_with_degenerate_bbox_is_accepted(self, skeleton_task):
-        """[0,0,0,0] is the single allowed degenerate state (matches migration backfill for all-outside skeletons)."""
+        """[0,0,0,0] is the allowed degenerate state (e.g. all keypoints outside)."""
         job_id, label_ids = skeleton_task
         payload = {
             "shapes": [self._skeleton_shape(label_ids, bbox=[0.0, 0.0, 0.0, 0.0])],
@@ -291,8 +304,9 @@ class TestSkeletonBbox:
 
     # ---------- PATCH (update) path ----------
 
-    def test_update_skeleton_without_bbox_is_rejected(self, skeleton_task):
-        """R7 breaking: PATCH must also enforce bbox presence for skeleton."""
+    def test_update_skeleton_without_bbox_is_accepted(self, skeleton_task):
+        """PATCH may omit bbox: it resets to the empty 'not yet persisted' state.
+        Old clients that never send bbox keep working (no breaking change)."""
         job_id, label_ids = skeleton_task
         # Create with valid bbox first.
         payload = {
@@ -308,10 +322,10 @@ class TestSkeletonBbox:
         created_id = response.json()["shapes"][0]["id"]
 
         # Now PATCH the same shape with bbox stripped.
-        bad_update = self._skeleton_shape(label_ids, bbox=None)
-        bad_update["id"] = created_id
+        update = self._skeleton_shape(label_ids, bbox=None)
+        update["id"] = created_id
         update_payload = {
-            "shapes": [bad_update],
+            "shapes": [update],
             "tracks": [],
             "tags": [],
             "version": 1,
@@ -319,7 +333,7 @@ class TestSkeletonBbox:
         response = patch_method(
             self._USERNAME, f"jobs/{job_id}/annotations", update_payload, action="update"
         )
-        assert response.status_code == HTTPStatus.BAD_REQUEST
+        assert response.status_code == HTTPStatus.OK
 
     def test_update_skeleton_with_new_bbox_succeeds(self, skeleton_task):
         """PATCH with a Normal-state bbox replaces the stored value."""

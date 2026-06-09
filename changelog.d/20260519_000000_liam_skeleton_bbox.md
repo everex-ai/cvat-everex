@@ -1,9 +1,10 @@
 ### Added
 
 - Skeleton shape에 1급 `bbox = [xtl, ytl, xbr, ybr]` 필드 추가. annotator가
-  처음 그린 회색 박스가 객체 경계로 영속 저장됨. wrapping rect는 더 이상
-  매 렌더마다 keypoint min/max + margin으로 계산되지 않고 저장된 값을 그대로
-  사용. (`docs/plans/2026-05-19-001-feat-skeleton-bbox-persistence-plan.md`)
+  그린 회색 박스가 객체 경계로 영속 저장됨. 저장된 값이 있으면 wrapping rect는
+  매 렌더마다 재계산하지 않고 그대로 사용하고, 없으면(기존 skeleton) keypoint
+  min/max + margin으로 도출하는 폴백을 유지.
+  (`docs/plans/2026-05-19-001-feat-skeleton-bbox-persistence-plan.md`)
 - COCO Keypoints import가 `annotations[i].bbox` (xywh)를 skeleton bbox로
   보존. 이전에는 `RemoveBboxAnnotations` transformer가 강제로 폐기했음.
 - COCO Keypoints export 시 skeleton bbox에서 person bbox annotation을 동반
@@ -11,16 +12,20 @@
 
 ### Changed
 
-- **\[Breaking — write 경로\]** skeleton 생성/수정 REST 요청 (POST/PATCH
-  `/api/jobs/<id>/annotations`)에 `bbox` 필드가 필수. 누락 시 400.
-  기존 SDK 클라이언트가 skeleton을 생성하는 자동화 스크립트는 SDK 메이저
-  버전 bump가 필요. 응답만 읽는 read-only 클라이언트는 호환 (필드 추가만).
-- skeleton 유효 bbox 상태는 둘 중 하나로 정의:
+- skeleton 생성/수정 REST 요청 (POST/PATCH `/api/jobs/<id>/annotations`)의
+  `bbox` 필드는 **선택**. 생략하거나 빈 배열이면 "아직 미영속" 상태로 저장되고
+  캔버스/export가 keypoint에서 박스를 도출. 기존 SDK/자동화 클라이언트는 수정
+  없이 호환 (read-only·write 모두, breaking 아님). 값을 보내면 아래 Normal 또는
+  `[0,0,0,0]`만 허용.
+- skeleton 유효 bbox 상태는 셋 중 하나로 정의:
   - **Normal** — `[xtl, ytl, xbr, ybr]` with `xtl<xbr and ytl<ybr` (annotator
     가 그린 객체 경계)
-  - **Degenerate** — 정확히 `[0, 0, 0, 0]` (모든 element가 `outside=true`인
-    드문 케이스; migration backfill에서만 발생, 첫 정상 편집 시 자동 회복)
-  - 그 외 입력 (zero-area non-degenerate, 역전된 좌표, 빈 배열)은 모두 400.
+  - **Degenerate** — 정확히 `[0, 0, 0, 0]` (모든 element가 `outside=true`이거나
+    정규화 대기 중인 draft; 첫 정상 편집 시 자동 회복)
+  - **Empty** — `[]` (bbox 미영속. bbox 필드 도입 전 생성된 기존 skeleton 및
+    bbox를 안 보낸 write 요청. 캔버스/export가 keypoint extent로 폴백하고, 첫
+    편집 시 soft-snap으로 영속화)
+  - 그 외 입력 (zero-area non-degenerate, 역전된 좌표, len≠4)은 모두 400.
 - skeleton 회전 의미 변경: 기존엔 `Shape.rotation`을 항상 0으로 강제하고
   child keypoint 좌표를 직접 회전시켰음. 이제 `Shape.rotation`이 의미 있는
   스칼라로 보존되고, child keypoint는 변형되지 않으며, 캔버스가 SVG
@@ -36,11 +41,12 @@
 - skeleton track의 frame 간 bbox는 선형 보간되어 표시. 보간 frame에서
   사용자가 bbox를 수정하면 그 frame이 자동으로 새 keyframe으로 격상됨
   (implicit keyframe — keypoint 수정과 동일한 패턴).
-- Migration `0098_add_skeleton_bbox`: 모든 LabeledShape/TrackedShape에 bbox
-  컬럼 추가 후 기존 skeleton row를 element keypoint min/max ± 20px로
-  chunked backfill (5,000 row/batch). production DB 약 673,870 skeleton
-  parent row 기준 약 10-20분 소요 예상. **배포 시 약 30분 read-only
-  maintenance window 권장** (annotation write API 차단, RQ worker 일시 정지).
+- Migration `0098_add_skeleton_bbox`: LabeledShape/TrackedShape에 `bbox`
+  컬럼만 추가하는 순수 additive 스키마 변경 (**backfill 없음**). 기존 row
+  data는 읽지도 쓰지도 않으므로 좌표 손실 위험이 없고 maintenance window도
+  불필요 — 일반 배포로 적용 가능. 기존 skeleton은 bbox가 빈 채로 남아
+  캔버스/export가 keypoint extent에서 wrapping rect를 도출하고, 첫 편집 시
+  soft-snap이 값을 영속화.
 
 ### Fixed
 
