@@ -3273,18 +3273,23 @@ class ShapeSerializer(serializers.Serializer):
         bbox = attrs.get("bbox", [])
         if shape_type == models.ShapeType.SKELETON:
             # Valid skeleton bbox is one of:
-            #  - Normal: len==4 and xtl < xbr and ytl < ybr (annotator-drawn object boundary)
-            #  - Degenerate: exactly [0, 0, 0, 0] (migration backfill for all-outside skeleton)
-            # Anything else (empty, wrong length, zero-area non-degenerate, inverted) is rejected.
-            if bbox == [0.0, 0.0, 0.0, 0.0] or bbox == [0, 0, 0, 0]:
-                pass  # degenerate state allowed
+            #  - Empty []: no annotator-drawn bbox persisted yet. Skeletons created
+            #    before this field existed carry this (migration 0098 adds the column
+            #    without backfilling). The canvas/export derive a fitted rect from the
+            #    child keypoints on the fly, and the first edit soft-snaps a real value.
+            #  - Degenerate [0, 0, 0, 0]: all elements outside, or a draft awaiting
+            #    normalization on the next edit.
+            #  - Normal: len==4 and xtl < xbr and ytl < ybr (annotator-drawn boundary).
+            # Anything else (wrong length, zero-area non-degenerate, inverted) is rejected.
+            if not bbox or bbox == [0.0, 0.0, 0.0, 0.0] or bbox == [0, 0, 0, 0]:
+                pass  # empty (not yet persisted) or degenerate state allowed
             elif len(bbox) == 4 and bbox[0] < bbox[2] and bbox[1] < bbox[3]:
                 pass  # normal state
             else:
                 raise serializers.ValidationError({
                     "bbox": (
                         "skeleton requires bbox = [xtl, ytl, xbr, ybr] with xtl<xbr and ytl<ybr, "
-                        "or exactly [0,0,0,0] for all-outside skeletons"
+                        "[0,0,0,0], or [] when no bbox has been drawn yet"
                     )
                 })
         else:
