@@ -2307,43 +2307,6 @@ export class SkeletonShape extends Shape {
         );
     }
 
-    protected saveBbox(bbox: number[], frame: number): void {
-        if (!Array.isArray(bbox) || bbox.length !== 4) {
-            throw new ArgumentError(
-                `Skeleton bbox must be a 4-element array [xtl, ytl, xbr, ybr]; got ${JSON.stringify(bbox)}`,
-            );
-        }
-        const undoBbox = [...this.bbox];
-        const redoBbox = [...bbox];
-        const undoSource = this.source;
-        const redoSource = this.readOnlyFields.includes('source') ? this.source : computeNewSource(this.source);
-
-        this.bbox = redoBbox;
-        this.source = redoSource;
-        // Bump updated immediately. The history redo/undo callbacks also bump
-        // it, but they don't run on the original save path — the canvas diff
-        // logic (drawnState.updated !== state.updated) relies on this so the
-        // wrapping rect gets re-drawn after a soft-snap or programmatic bbox
-        // change.
-        this.updated = Date.now();
-
-        this.history.do(
-            HistoryActions.CHANGED_POINTS,
-            () => {
-                this.bbox = undoBbox;
-                this.source = undoSource;
-                this.updated = Date.now();
-            },
-            () => {
-                this.bbox = redoBbox;
-                this.source = redoSource;
-                this.updated = Date.now();
-            },
-            [this.clientID],
-            frame,
-        );
-    }
-
     public save(frame: number, data: ObjectState): ObjectState {
         if (this.lock && data.lock) {
             return new ObjectState(this.get(frame));
@@ -2356,9 +2319,14 @@ export class SkeletonShape extends Shape {
 
             try {
                 this.history.freeze(true);
-                affectedElements.forEach((element, idx) => {
-                    const annotationContext = this.elements[idx];
-                    annotationContext.save(frame, element);
+                affectedElements.forEach((element) => {
+                    // match by clientID — affectedElements is a filtered
+                    // subset, positional indexing would update wrong elements
+                    const annotationContext = this.elements
+                        .find((el) => el.clientID === element.clientID);
+                    if (annotationContext) {
+                        annotationContext.save(frame, element);
+                    }
                 });
             } finally {
                 this.history.freeze(false);
@@ -2398,10 +2366,6 @@ export class SkeletonShape extends Shape {
         updatedHidden.forEach((el) => { el.updateFlags.hidden = false; });
         updatedLock.forEach((el) => { el.updateFlags.lock = false; });
 
-        if (updatedPoints.length) {
-            updateElements(updatedPoints, HistoryActions.CHANGED_POINTS, 'points');
-        }
-
         if (updatedOccluded.length) {
             updatedOccluded.forEach((el) => { el.updateFlags.occluded = true; });
             updateElements(updatedOccluded, HistoryActions.CHANGED_OCCLUDED, 'occluded');
@@ -2417,45 +2381,93 @@ export class SkeletonShape extends Shape {
             updateElements(updatedLock, HistoryActions.CHANGED_LOCK, 'lock');
         }
 
-        // Persist parent skeleton bbox before delegating to base Shape.save.
-        // Reset the flag so base Shape.save does not see it (we own it here).
+        // Element keypoints and the wrapping bbox always change as ONE user
+        // action (whole-skeleton drag, bbox resize, keypoint move with its
+        // soft-snap). They are applied and recorded as ONE history entry so
+        // that a single undo/redo restores both together. The bbox flag is
+        // consumed here so base Shape.save never sees it.
         let nextBbox: number[] | null = null;
         if ((data.updateFlags as any).bbox) {
             nextBbox = [...(data.bbox as number[])];
             (data.updateFlags as any).bbox = false;
         }
 
-        // Soft-snap: after any keypoint or bbox change, recompute the bbox so
-        // that it always contains every visible/occluded keypoint. Runs
-        // unconditionally because the redux store creates fresh ObjectStates
-        // for parent and children on every fetch, so we can't rely on
-        // `data.elements[i].updateFlags.points` to flag what moved — the
-        // canonical truth is `this.elements[i].points` (internal Shape
-        // instances).
-        const baseBbox = nextBbox ??
-            (this.bbox && this.bbox.length === 4 ? [...this.bbox] : null);
-        if (baseBbox) {
-            let [xtl, ytl, xbr, ybr] = baseBbox;
-            let touched = false;
-            for (const element of this.elements) {
-                if (element.outside) continue;
-                const pts = element.points;
-                for (let i = 0; i < pts.length; i += 2) {
-                    const px = pts[i];
-                    const py = pts[i + 1];
-                    if (px < xtl) { xtl = px; touched = true; }
-                    if (py < ytl) { ytl = py; touched = true; }
-                    if (px > xbr) { xbr = px; touched = true; }
-                    if (py > ybr) { ybr = py; touched = true; }
-                }
-            }
-            if (touched || nextBbox !== null) {
-                nextBbox = [xtl, ytl, xbr, ybr];
-            }
-        }
+        if (updatedPoints.length || nextBbox !== null) {
+            const undoSkeletonPoints = this.elements.map((element) => element.points);
+            const undoBbox = [...this.bbox];
+            const undoSource = this.source;
+            const redoSource = this.readOnlyFields.includes('source') ? this.source : computeNewSource(this.source);
 
-        if (nextBbox !== null) {
-            this.saveBbox(nextBbox, frame);
+            try {
+                this.history.freeze(true);
+                updatedPoints.forEach((element) => {
+                    // match by clientID — updatedPoints is a filtered subset,
+                    // positional indexing would update wrong elements
+                    const annotationContext = this.elements
+                        .find((el) => el.clientID === element.clientID);
+                    if (annotationContext) {
+                        annotationContext.save(frame, element);
+                    }
+                });
+            } finally {
+                this.history.freeze(false);
+            }
+
+            // Soft-snap: the bbox must contain every visible/occluded
+            // keypoint. It only expands here — it never shrinks.
+            const baseBbox = nextBbox ??
+                (this.bbox && this.bbox.length === 4 ? [...this.bbox] : null);
+            if (baseBbox) {
+                let [xtl, ytl, xbr, ybr] = baseBbox;
+                for (const element of this.elements) {
+                    if (element.outside) continue;
+                    const pts = element.points;
+                    for (let i = 0; i < pts.length; i += 2) {
+                        xtl = Math.min(xtl, pts[i]);
+                        xbr = Math.max(xbr, pts[i]);
+                        ytl = Math.min(ytl, pts[i + 1]);
+                        ybr = Math.max(ybr, pts[i + 1]);
+                    }
+                }
+                this.bbox = [xtl, ytl, xbr, ybr];
+            }
+
+            const bboxChanged = this.bbox.length !== undoBbox.length ||
+                this.bbox.some((value, idx) => value !== undoBbox[idx]);
+            if (updatedPoints.length || bboxChanged) {
+                this.source = redoSource;
+                this.updated = Date.now();
+
+                const redoSkeletonPoints = this.elements.map((element) => element.points);
+                const redoBbox = [...this.bbox];
+                this.history.do(
+                    HistoryActions.CHANGED_POINTS,
+                    () => {
+                        for (let i = 0; i < this.elements.length; i++) {
+                            this.elements[i].points = undoSkeletonPoints[i];
+                            this.elements[i].updated = Date.now();
+                        }
+                        this.bbox = [...undoBbox];
+                        this.source = undoSource;
+                        this.updated = Date.now();
+                    },
+                    () => {
+                        for (let i = 0; i < this.elements.length; i++) {
+                            this.elements[i].points = redoSkeletonPoints[i];
+                            this.elements[i].updated = Date.now();
+                        }
+                        this.bbox = [...redoBbox];
+                        this.source = redoSource;
+                        this.updated = Date.now();
+                    },
+                    [this.clientID, ...this.elements.map((element) => element.clientID)],
+                    frame,
+                );
+            } else {
+                // nothing actually changed (e.g. a duplicated/no-op event) —
+                // do not pollute history or change the source
+                this.bbox = undoBbox;
+            }
         }
 
         const result = Shape.prototype.save.call(this, frame, data);
@@ -3326,50 +3338,6 @@ export class SkeletonTrack extends Track {
         );
     }
 
-    protected saveBbox(bbox: number[], frame: number): void {
-        if (!Array.isArray(bbox) || bbox.length !== 4) {
-            throw new ArgumentError(
-                `Skeleton bbox must be a 4-element array [xtl, ytl, xbr, ybr]; got ${JSON.stringify(bbox)}`,
-            );
-        }
-        // Mirror savePoints semantics so editing an interpolated frame implicitly
-        // promotes that frame to a keyframe (matches keypoint editing UX).
-        const wasKeyframe = frame in this.shapes;
-        const undoShape = wasKeyframe ? this.shapes[frame] : undefined;
-        const undoSource = this.source;
-        const redoSource = this.readOnlyFields.includes('source') ? this.source : computeNewSource(this.source);
-        const redoShape = wasKeyframe ?
-            { ...this.shapes[frame], bbox: [...bbox] } :
-            { ...copyShape(this.get(frame)), bbox: [...bbox] };
-
-        this.shapes[frame] = redoShape;
-        this.source = redoSource;
-        // See SkeletonShape.saveBbox — bump updated immediately so the canvas
-        // redraw diff picks up the new bbox without waiting for a separate
-        // user action on the wrapping rect.
-        this.updated = Date.now();
-
-        this.history.do(
-            HistoryActions.CHANGED_POINTS,
-            () => {
-                if (undoShape) {
-                    this.shapes[frame] = undoShape;
-                } else {
-                    delete this.shapes[frame];
-                }
-                this.source = undoSource;
-                this.updated = Date.now();
-            },
-            () => {
-                this.shapes[frame] = redoShape;
-                this.source = redoSource;
-                this.updated = Date.now();
-            },
-            [this.clientID],
-            frame,
-        );
-    }
-
     // Method is used to export data to the server
     public toJSON(): SerializedTrack {
         const result: SerializedTrack = Track.prototype.toJSON.call(this);
@@ -3494,10 +3462,15 @@ export class SkeletonTrack extends Track {
             const errors = [];
             try {
                 this.history.freeze(true);
-                affectedElements.forEach((element, idx) => {
+                affectedElements.forEach((element) => {
                     try {
-                        const annotationContext = this.elements[idx];
-                        annotationContext.save(frame, element);
+                        // match by clientID — affectedElements is a filtered
+                        // subset, positional indexing would update wrong elements
+                        const annotationContext = this.elements
+                            .find((el) => el.clientID === element.clientID);
+                        if (annotationContext) {
+                            annotationContext.save(frame, element);
+                        }
                     } catch (error: any) {
                         errors.push(error);
                     }
@@ -3561,10 +3534,6 @@ export class SkeletonTrack extends Track {
         updatedHidden.forEach((el) => { el.updateFlags.hidden = false; });
         updatedLock.forEach((el) => { el.updateFlags.lock = false; });
 
-        if (updatedPoints.length) {
-            updateElements(updatedPoints, HistoryActions.CHANGED_POINTS);
-        }
-
         if (updatedOccluded.length) {
             updatedOccluded.forEach((el) => { el.updateFlags.occluded = true; });
             updateElements(updatedOccluded, HistoryActions.CHANGED_OCCLUDED);
@@ -3594,73 +3563,145 @@ export class SkeletonTrack extends Track {
             updateElements(updatedLock, HistoryActions.CHANGED_LOCK, 'lock');
         }
 
-        // Persist skeleton bbox at this frame (implicit keyframe semantics)
-        // before delegating to base Track.save.
+        // Element keypoints and the per-frame bbox change as ONE user action
+        // (whole-skeleton drag, bbox resize, keypoint move with soft-snap),
+        // so they are applied and recorded as ONE history entry — a single
+        // undo restores both together. Implicit keyframe semantics: editing
+        // an interpolated frame promotes it to a keyframe, for the elements
+        // and the parent bbox alike. The bbox flag is consumed here so base
+        // Track.save never sees it.
         let nextBbox: number[] | null = null;
         if ((data.updateFlags as any).bbox) {
             nextBbox = [...(data.bbox as number[])];
             (data.updateFlags as any).bbox = false;
         }
 
-        // Soft-snap: keep the per-frame bbox tight around visible/occluded
-        // keypoints after any keypoint or bbox change. Runs unconditionally
-        // (same rationale as SkeletonShape.save): redux store creates fresh
-        // ObjectStates on every fetch, so we cannot rely on
-        // `data.elements[i].updateFlags.points` to flag what moved — the
-        // canonical truth is `this.elements[i].get(frame).points`.
-        //
-        // When the stored shape at this frame has no bbox (or the legacy
-        // [0,0,0,0] fallback), seed the soft-snap from the keypoints + a small
-        // visual margin so the first edit does not collapse the bbox onto the
-        // keypoint corner. Matches SkeletonShape constructor's fallback.
-        const SKELETON_TRACK_BBOX_FALLBACK_MARGIN = 20;
-        const storedShape = this.shapes[frame];
-        const storedBbox = storedShape && Array.isArray((storedShape as any).bbox) &&
-            (storedShape as any).bbox.length === 4 ?
-            [...(storedShape as any).bbox as number[]] :
-            null;
-        const storedIsDegenerate = !storedBbox ||
-            (storedBbox[0] === 0 && storedBbox[1] === 0 &&
-                storedBbox[2] === 0 && storedBbox[3] === 0);
+        if (updatedPoints.length || nextBbox !== null) {
+            const undoSkeletonShapes = this.elements.map((element) => element.shapes[frame]);
+            const undoParentShape = frame in this.shapes ? this.shapes[frame] : undefined;
+            const undoSource = this.source;
+            const redoSource = this.readOnlyFields.includes('source') ? this.source : computeNewSource(this.source);
 
-        const seedBbox = nextBbox ?? (storedBbox && !storedIsDegenerate ? storedBbox : null);
-        if (seedBbox || nextBbox !== null || updatedPoints.length > 0 || storedShape) {
+            // displayed (possibly interpolated) parent position before the edit
+            const parentPosition = this.get(frame);
+
+            const errors = [];
+            try {
+                this.history.freeze(true);
+                updatedPoints.forEach((element) => {
+                    try {
+                        // match by clientID — updatedPoints is a filtered subset,
+                        // positional indexing would update wrong elements
+                        const annotationContext = this.elements
+                            .find((el) => el.clientID === element.clientID);
+                        if (annotationContext) {
+                            annotationContext.save(frame, element);
+                        }
+                    } catch (error: any) {
+                        errors.push(error);
+                    }
+                });
+            } finally {
+                this.history.freeze(false);
+            }
+
+            // Soft-snap: the per-frame bbox must contain every visible/occluded
+            // keypoint; it only expands, it never shrinks. When there is no
+            // usable bbox yet (legacy data), derive one from the keypoint
+            // extent plus a small visual margin (matches SkeletonShape).
+            const SKELETON_TRACK_BBOX_FALLBACK_MARGIN = 20;
+            const displayedBbox = Array.isArray(parentPosition.bbox) && parentPosition.bbox.length === 4 &&
+                !(parentPosition.bbox[0] === 0 && parentPosition.bbox[1] === 0 &&
+                    parentPosition.bbox[2] === 0 && parentPosition.bbox[3] === 0) ?
+                [...parentPosition.bbox] :
+                null;
+            const seedBbox = nextBbox ?? displayedBbox;
             let xtl = seedBbox ? seedBbox[0] : Number.POSITIVE_INFINITY;
             let ytl = seedBbox ? seedBbox[1] : Number.POSITIVE_INFINITY;
             let xbr = seedBbox ? seedBbox[2] : Number.NEGATIVE_INFINITY;
             let ybr = seedBbox ? seedBbox[3] : Number.NEGATIVE_INFINITY;
-            let touched = !seedBbox; // when seeding from keypoints we must add the margin
             for (const element of this.elements) {
                 const elementPosition = element.get(frame);
                 if (elementPosition.outside) continue;
                 const pts = elementPosition.points as number[];
                 for (let i = 0; i < pts.length; i += 2) {
-                    const px = pts[i];
-                    const py = pts[i + 1];
-                    if (px < xtl) { xtl = px; touched = true; }
-                    if (py < ytl) { ytl = py; touched = true; }
-                    if (px > xbr) { xbr = px; touched = true; }
-                    if (py > ybr) { ybr = py; touched = true; }
+                    xtl = Math.min(xtl, pts[i]);
+                    xbr = Math.max(xbr, pts[i]);
+                    ytl = Math.min(ytl, pts[i + 1]);
+                    ybr = Math.max(ybr, pts[i + 1]);
                 }
             }
-            if (touched && Number.isFinite(xtl) && Number.isFinite(ytl) &&
+            let mergedBbox: number[] | null = null;
+            if (Number.isFinite(xtl) && Number.isFinite(ytl) &&
                 Number.isFinite(xbr) && Number.isFinite(ybr)) {
-                if (!seedBbox) {
-                    // No usable prior bbox — emit a freshly-derived one with margin.
-                    nextBbox = [
-                        xtl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
-                        ytl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
-                        xbr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
-                        ybr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
-                    ];
-                } else if (touched || nextBbox !== null) {
-                    nextBbox = [xtl, ytl, xbr, ybr];
-                }
+                mergedBbox = seedBbox ? [xtl, ytl, xbr, ybr] : [
+                    xtl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ytl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    xbr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ybr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                ];
             }
-        }
 
-        if (nextBbox !== null) {
-            this.saveBbox(nextBbox, frame);
+            const bboxChanged = mergedBbox !== null &&
+                (displayedBbox === null || mergedBbox.some((value, idx) => value !== displayedBbox[idx]));
+
+            if (updatedPoints.length || bboxChanged) {
+                if (mergedBbox !== null) {
+                    this.shapes[frame] = undoParentShape !== undefined ?
+                        { ...undoParentShape, bbox: mergedBbox } :
+                        { ...copyShape(parentPosition), bbox: mergedBbox };
+                }
+                this.source = redoSource;
+                this.updated = Date.now();
+
+                const redoSkeletonShapes = this.elements.map((element) => element.shapes[frame]);
+                const redoParentShape = frame in this.shapes ? this.shapes[frame] : undefined;
+                this.history.do(
+                    HistoryActions.CHANGED_POINTS,
+                    () => {
+                        for (let i = 0; i < this.elements.length; i++) {
+                            const element = this.elements[i];
+                            if (undoSkeletonShapes[i]) {
+                                element.shapes[frame] = undoSkeletonShapes[i];
+                            } else {
+                                delete element.shapes[frame];
+                            }
+                            element.updated = Date.now();
+                        }
+                        if (undoParentShape) {
+                            this.shapes[frame] = undoParentShape;
+                        } else {
+                            delete this.shapes[frame];
+                        }
+                        this.source = undoSource;
+                        this.updated = Date.now();
+                    },
+                    () => {
+                        for (let i = 0; i < this.elements.length; i++) {
+                            const element = this.elements[i];
+                            if (redoSkeletonShapes[i]) {
+                                element.shapes[frame] = redoSkeletonShapes[i];
+                            } else {
+                                delete element.shapes[frame];
+                            }
+                            element.updated = Date.now();
+                        }
+                        if (redoParentShape) {
+                            this.shapes[frame] = redoParentShape;
+                        } else {
+                            delete this.shapes[frame];
+                        }
+                        this.source = redoSource;
+                        this.updated = Date.now();
+                    },
+                    [this.clientID, ...this.elements.map((element) => element.clientID)],
+                    frame,
+                );
+            }
+
+            if (errors.length) {
+                throw new Error(`Several errors occurred during saving skeleton:\n ${errors.join(';\n')}`);
+            }
         }
 
         const result = Track.prototype.save.call(this, frame, data);

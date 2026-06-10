@@ -3941,6 +3941,17 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 }
 
                 const templateElement = templateElements.find((el: SVG.Circle) => el.attr('data-label-id') === element.label.id);
+                if (!templateElement) {
+                    // a label whose SVG template does not reference this
+                    // sublabel (e.g. created/edited via raw API) must not
+                    // crash the whole canvas — skip the keypoint instead
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        `Skeleton sublabel #${element.label.id} (${element.label.name}) ` +
+                        'is missing in the skeleton SVG template, its keypoint was skipped',
+                    );
+                    continue;
+                }
                 const circle = skeleton.circle()
                     .center(cx, cy)
                     .attr({

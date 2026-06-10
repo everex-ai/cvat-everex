@@ -1028,35 +1028,27 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
             updateActiveControl(ActiveControl.CURSOR);
         }
         // Skeleton keypoint edits arrive with the element's ObjectState.
-        // Bundling the parent SkeletonShape into the same save batch lets
-        // SkeletonShape.save run its soft-snap pass (which recomputes the
-        // wrapping bbox from the updated keypoints). Without this, the
-        // child save runs in isolation and the bbox never updates until
-        // the user touches the wrapping rect by hand.
-        //
-        // The redux store holds a separate ObjectState for the parent whose
-        // elements[] are fresh ObjectState instances (not the same object as
-        // the edited element state). SkeletonShape.save inspects the
-        // parent's own elements[*].updateFlags.points to decide which
-        // children moved — so we forward the edited element's points onto
-        // its matching child inside the parent state before dispatching.
-        const statesToUpdate: any[] = [state];
+        // The edit is forwarded onto the matching child inside the PARENT
+        // state and only the parent is dispatched: SkeletonShape/SkeletonTrack
+        // .save apply the child update and the soft-snapped bbox together as
+        // ONE history entry, so a single undo restores keypoints and bbox at
+        // once. Saving the child separately would both duplicate the change
+        // and split the action into several undo steps.
+        let statesToUpdate: any[] = [state];
         if (Number.isInteger(state.parentID) && Array.isArray(annotations)) {
             const parentState = annotations.find(
                 (s: any) => s.clientID === state.parentID,
             );
             if (parentState && parentState.shapeType === 'skeleton' &&
-                !statesToUpdate.includes(parentState)) {
-                if (Array.isArray(points) && points.length > 0 &&
-                    Array.isArray(parentState.elements)) {
-                    const childInParent = parentState.elements.find(
-                        (el: any) => el.clientID === state.clientID,
-                    );
-                    if (childInParent) {
-                        childInParent.points = points;
-                    }
+                Array.isArray(points) && points.length > 0 &&
+                Array.isArray(parentState.elements)) {
+                const childInParent = parentState.elements.find(
+                    (el: any) => el.clientID === state.clientID,
+                );
+                if (childInParent) {
+                    childInParent.points = points;
+                    statesToUpdate = [parentState];
                 }
-                statesToUpdate.push(parentState);
             }
         }
         onUpdateAnnotations(statesToUpdate);

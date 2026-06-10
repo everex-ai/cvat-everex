@@ -51,6 +51,18 @@
 
 ### Fixed
 
+- skeleton 편집(전체 이동/리사이즈/keypoint 이동) 1회가 히스토리 엔트리
+  2~3개로 쪼개져 undo를 여러 번 눌러야 하고, 중간 단계에서 bbox만 따로
+  복원되어 객체에서 벗어나 보이던 문제 수정. keypoint와 bbox 변경이 단일
+  히스토리 엔트리로 통합되어 undo/redo 1회로 함께 복원됨. element 편집은
+  부모 skeleton 1회 저장으로 합쳐져(이중 저장 제거) keypoint 이동 시
+  soft-snap bbox 확장도 정상 동작.
+- skeleton element 일괄 갱신(updateElements)이 부분집합을 위치 인덱스로
+  매칭해 잘못된 element를 갱신할 수 있던 잠재 버그 수정 (clientID 매칭).
+- label의 skeleton SVG 구조와 sublabel이 불일치할 때(`data-label-id` 누락
+  등) 캔버스 전체가 TypeError로 죽던 문제 수정 — 해당 keypoint만 건너뛰고
+  콘솔 경고를 남김.
+
 - skeleton rotation이 마우스를 놓는 순간 사라지던 문제 수정: 회전이 어떤
   영속 상태에도 반영되지 않았음. 이제 마우스업 시 cvat-core가 회전을
   keypoint 좌표에 베이크하고 필요 시 bbox를 확장. 제스처 중 wrapping
