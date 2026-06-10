@@ -282,6 +282,11 @@ export class CanvasViewImpl implements CanvasView, Listener {
             } else if (shapeType === 'skeleton') {
                 drawnShape.rotate(0);
                 for (const child of (drawnShape as SVG.G).children()) {
+                    if (child.type === 'circle' || child.type === 'line') {
+                        // drop transient rotation transforms left by an
+                        // aborted rotation gesture
+                        child.untransform();
+                    }
                     if (child.type === 'circle') {
                         const childClientID = child.attr('data-client-id');
                         const element = drawnState.elements.find((el: any) => el.clientID === childClientID);
@@ -1591,6 +1596,14 @@ export class CanvasViewImpl implements CanvasView, Listener {
             let resized = false;
             let aborted = false;
             let start = Date.now();
+            // Final angle of an ongoing skeleton rotation gesture. Skeleton
+            // rotation is visualized with transient transforms on keypoint
+            // circles and edge lines only — the group and the wrapping rect
+            // are never rotated (the bbox stays an axis-aligned rectangle by
+            // definition), so the angle cannot be read back from the group
+            // transform on resizedone and must be tracked here. On mouseup
+            // cvat-core bakes the angle into keypoint coordinates.
+            let skeletonGestureRotation = 0;
 
             (resizableInstance as any)
                 .resize({
@@ -1601,6 +1614,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     onResizeStart();
                     resized = false;
                     start = Date.now();
+                    skeletonGestureRotation = 0;
                     this.resizableShape = shape;
                 })
                 .on('resizing', (e: CustomEvent): void => {
@@ -1610,10 +1624,16 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     if (state.shapeType === 'skeleton' && e.target) {
                         const { instance } = e.target as any;
 
-                        // Rotation handle still drives the parent skeleton's
-                        // SVG rotation; the bbox stays axis-aligned.
+                        // svg.resize rotates the wrapping rect itself on
+                        // rotation-handle drag. Undo that — the bbox stays an
+                        // axis-aligned rectangle; keypoints and edges get a
+                        // transient visual rotation around the bbox center
+                        // below instead.
                         const { rotation } = resizableInstance.transform();
-                        shape.rotate(rotation);
+                        skeletonGestureRotation = rotation;
+                        if (rotation) {
+                            resizableInstance.rotate(0);
+                        }
 
                         let [x, y] = [instance.x(), instance.y()];
                         let width = instance.width();
@@ -1682,6 +1702,24 @@ export class CanvasViewImpl implements CanvasView, Listener {
                         resized = true;
                         skeletonSVGTemplate = skeletonSVGTemplate ?? makeSVGFromTemplate(state.label.structure.svg);
                         setupSkeletonEdges(shape as SVG.G, skeletonSVGTemplate);
+
+                        // Transient visual rotation of keypoints and skeleton
+                        // edges around the bbox center while the rotation
+                        // handle is being dragged. The wrapping rect stays
+                        // upright. The transforms disappear with the full
+                        // redraw after mouseup, when the angle has been baked
+                        // into the keypoint coordinates by cvat-core.
+                        const pivotX = x + width / 2;
+                        const pivotY = y + height / 2;
+                        for (const child of (shape as SVG.G).children()) {
+                            if (child.type === 'circle' || child.type === 'line') {
+                                if (skeletonGestureRotation) {
+                                    child.rotate(skeletonGestureRotation, pivotX, pivotY);
+                                } else {
+                                    child.untransform();
+                                }
+                            }
+                        }
                     }
                 })
                 .on('resizedone', (): void => {
@@ -1694,18 +1732,23 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     this.resizableShape = null;
 
                     // be sure, that rotation in range [0; 360]
-                    let rotation = getRoundedRotation(shape);
+                    // (skeleton: the group is never rotated — the gesture
+                    // angle was tracked in skeletonGestureRotation and will be
+                    // baked into keypoint coordinates by cvat-core)
+                    let rotation = state.shapeType === 'skeleton' ?
+                        Math.round(skeletonGestureRotation) :
+                        getRoundedRotation(shape);
                     while (rotation < 0) rotation += 360;
                     rotation %= 360;
 
                     if (resized) {
                         if (state.shapeType === 'skeleton') {
-                            // Bbox-only resize: keypoints stayed put, only the
-                            // wrapping rect changed (and possibly the parent
-                            // rotation via the rotation handle). Emit the new
-                            // bbox in canvas-space; element points are passed
-                            // through unchanged so cvat-core knows this edit
-                            // does not touch keypoints.
+                            // Corner/edge resize: keypoints stayed put, only
+                            // the wrapping rect changed. Rotation handle: the
+                            // angle is emitted and baked into keypoints in
+                            // cvat-core; the bbox stays axis-aligned (it only
+                            // auto-expands there if rotated keypoints exceed
+                            // it). Element points are passed through unchanged.
                             const points: number[] = [];
                             state.elements.forEach((element: any) => {
                                 const elementShape = (shape as SVG.G).children()
@@ -4031,6 +4074,12 @@ export class CanvasViewImpl implements CanvasView, Listener {
         if (state.hidden || state.outside || this.isInnerHidden(state.clientID)) {
             skeleton.addClass('cvat_canvas_hidden');
         }
+
+        // NOTE: no rotation transform is applied here on purpose. Skeleton
+        // rotation is always baked into the keypoint coordinates on save
+        // (state.rotation stays 0) and the wrapping rect is an axis-aligned
+        // rectangle by definition — nothing in a skeleton ever carries a
+        // persistent SVG rotation.
 
         (skeleton as any).selectize = (enabled: boolean) => {
             this.selectize(enabled, wrappingRect);

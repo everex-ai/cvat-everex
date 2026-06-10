@@ -26,11 +26,12 @@
     bbox를 안 보낸 write 요청. 캔버스/export가 keypoint extent로 폴백하고, 첫
     편집 시 soft-snap으로 영속화)
   - 그 외 입력 (zero-area non-degenerate, 역전된 좌표, len≠4)은 모두 400.
-- skeleton 회전 의미 변경: 기존엔 `Shape.rotation`을 항상 0으로 강제하고
-  child keypoint 좌표를 직접 회전시켰음. 이제 `Shape.rotation`이 의미 있는
-  스칼라로 보존되고, child keypoint는 변형되지 않으며, 캔버스가 SVG
-  transform으로 시각적 회전을 처리. 데이터셋 export (CVAT XML, COCO,
-  Datumaro)도 skeleton rotation을 보존.
+- skeleton 회전: 회전은 child keypoint 좌표에 즉시 베이크되고
+  (`Shape.rotation`은 skeleton에서 항상 0), **bbox는 회전하지 않고 항상
+  axis-aligned 직사각형을 유지**. 회전 피벗은 저장된 bbox 중심(없으면
+  keypoint extent 중심). 회전된 keypoint가 기존 bbox를 벗어나면 bbox가
+  자동 확장되며(soft-snap), 절대 회전/축소되지 않음. 회전 제스처 중에는
+  keypoint와 edge만 시각적으로 회전하고 wrapping rect는 upright 유지.
 - skeleton 빨간 박스 corner/edge 핸들 드래그가 **bbox만** 변경하도록 의미
   재정의. 이전엔 모든 keypoint를 박스 변화에 비례해 스케일했음. line 드래그
   (테두리 잡기)는 기존 동작 유지 — bbox + keypoints가 함께 평행이동.
@@ -50,6 +51,14 @@
 
 ### Fixed
 
+- skeleton rotation이 마우스를 놓는 순간 사라지던 문제 수정: 회전이 어떤
+  영속 상태에도 반영되지 않았음. 이제 마우스업 시 cvat-core가 회전을
+  keypoint 좌표에 베이크하고 필요 시 bbox를 확장. 제스처 중 wrapping
+  rect가 마름모꼴로 기울던 표시도 제거(항상 upright).
+- skeleton track의 per-frame bbox가 implicit keyframe 생성(`copyShape`)과
+  서버 reload(`convertTrackedShape`) 경로에서 유실되던 문제 수정. 보간
+  frame에서 회전/편집해도 keyframe bbox가 보존되고, 새로고침 후에도 저장된
+  bbox가 유지됨.
 - Datumaro IR을 통한 skeleton transport에서 reserved-prefix attribute
   `__cvat_bbox` 사용. `quality_control` 의 `ignored_attrs` 와
   `consensus` merge 경로에서 이 attribute를 자동 제외해 transport metadata
