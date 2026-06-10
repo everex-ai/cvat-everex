@@ -1605,6 +1605,13 @@ export class CanvasViewImpl implements CanvasView, Listener {
             // cvat-core bakes the angle into keypoint coordinates.
             let skeletonGestureRotation = 0;
 
+            // make attaching idempotent — re-activation must never stack a
+            // second set of handlers on the same element
+            (resizableInstance as any).off('resizestart');
+            (resizableInstance as any).off('resizing');
+            (resizableInstance as any).off('resizedone');
+            (resizableInstance as any).off('resizeabort');
+
             (resizableInstance as any)
                 .resize({
                     snapToGrid: 0.1,
@@ -1748,20 +1755,26 @@ export class CanvasViewImpl implements CanvasView, Listener {
                             // angle is emitted and baked into keypoints in
                             // cvat-core; the bbox stays axis-aligned (it only
                             // auto-expands there if rotated keypoints exceed
-                            // it). Element points are passed through unchanged.
+                            // it). A rotation gesture must emit EMPTY points:
+                            // the canvas-side circle attributes are the
+                            // unrotated coordinates, and any consumer writing
+                            // them back would revert the rotation it just
+                            // requested.
                             const points: number[] = [];
-                            state.elements.forEach((element: any) => {
-                                const elementShape = (shape as SVG.G).children()
-                                    .find((child: SVG.Shape) => (
-                                        child.id() === `cvat_canvas_shape_${element.clientID}`
-                                    ));
+                            if (!rotation) {
+                                state.elements.forEach((element: any) => {
+                                    const elementShape = (shape as SVG.G).children()
+                                        .find((child: SVG.Shape) => (
+                                            child.id() === `cvat_canvas_shape_${element.clientID}`
+                                        ));
 
-                                if (elementShape) {
-                                    points.push(...this.translateFromCanvas(
-                                        readPointsFromShape(elementShape),
-                                    ));
-                                }
-                            });
+                                    if (elementShape) {
+                                        points.push(...this.translateFromCanvas(
+                                            readPointsFromShape(elementShape),
+                                        ));
+                                    }
+                                });
+                            }
 
                             const wrapRect = (shape as any).children()
                                 .find((child: SVG.Element) => child.type === 'rect');
@@ -1813,11 +1826,17 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 resizableInstance.fire('resizeabort');
             }
 
-            (shape as any).off('resizestart');
-            (shape as any).off('resizing');
-            (shape as any).off('resizedone');
-            (shape as any).off('resizeabort');
-            (shape as any).resize('stop');
+            // detach from resizableInstance, not shape: for skeletons the
+            // resize events live on the wrapping rect (a child of the group).
+            // Detaching from the group left the rect listeners in place, so
+            // every activate/deactivate cycle stacked one more set of
+            // handlers — a single mouseup then fired resizedone N times,
+            // and the duplicate events corrupted the annotation
+            (resizableInstance as any).off('resizestart');
+            (resizableInstance as any).off('resizing');
+            (resizableInstance as any).off('resizedone');
+            (resizableInstance as any).off('resizeabort');
+            (resizableInstance as any).resize('stop');
         }
     }
 
