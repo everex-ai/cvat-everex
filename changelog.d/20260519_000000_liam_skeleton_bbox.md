@@ -57,6 +57,15 @@
   뒤쪽 keyframe에서만 bbox를 그리면 그 사이 프레임 전체의 박스가 좌상단으로
   어긋남. 이제 `getPosition`이 보간 전에 degenerate bbox를 해당 keyframe의
   keypoint extent(+margin)로 해석해, 모든 프레임에서 박스가 keypoint를 감쌈.
+- skeleton track에서 keypoint가 bbox 밖으로 나가도 박스가 따라가지 않던
+  문제 수정. single-keyframe keypoint는 전 프레임에 공유되는데 parent bbox
+  keyframe은 독립적이라, 한 프레임에서 그 keypoint를 옮기면 그 프레임의
+  bbox만 soft-snap되고 다른 keyframe(및 그로부터 보간된 모든 프레임)의
+  bbox는 stale하게 남아 keypoint가 박스 밖으로 삐져나옴. 어떤 단일 편집
+  훅으로도 모든 keyframe을 일관되게 유지할 수 없으므로, bbox가 도출되는
+  단일 지점인 `getPosition`에서 표시 bbox가 항상 그 프레임의 visible
+  keypoint를 감싸도록(확장-only) 보장. export(`toJSON`)도 각 keyframe의
+  bbox를 그 keypoint를 감싸도록 확장해 재import 후 보간 정합성 유지.
 - skeleton 편집(전체 이동/리사이즈/keypoint 이동) 1회가 히스토리 엔트리
   2~3개로 쪼개져 undo를 여러 번 눌러야 하고, 중간 단계에서 bbox만 따로
   복원되어 객체에서 벗어나 보이던 문제 수정. keypoint와 bbox 변경이 단일

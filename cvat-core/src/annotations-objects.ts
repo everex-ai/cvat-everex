@@ -3343,12 +3343,57 @@ export class SkeletonTrack extends Track {
         const result: SerializedTrack = Track.prototype.toJSON.call(this);
 
         // Parent (skeleton) keyframes carry rotation + bbox per frame.
-        // points are always empty for skeleton parents.
+        // points are always empty for skeleton parents. Each keyframe's bbox
+        // is expanded to contain its own keypoints before export: a stored
+        // bbox can be stale (a shared single-keyframe keypoint moved at a
+        // different frame) or degenerate ([0,0,0,0] placeholder). Keeping each
+        // exported keyframe wrapping its keypoints means interpolation on
+        // re-import stays valid (linear interpolation preserves containment),
+        // matching what the canvas displays via getPosition.
+        const SKELETON_TRACK_BBOX_FALLBACK_MARGIN = 20;
         result.shapes = result.shapes.map((shape) => {
             const storedShape = this.shapes[shape.frame];
-            const bbox = storedShape && Array.isArray((storedShape as any).bbox) ?
+            const stored = storedShape && Array.isArray((storedShape as any).bbox) ?
                 [...(storedShape as any).bbox as number[]] :
-                [0, 0, 0, 0];
+                null;
+            const degenerate = !stored ||
+                (stored[0] === 0 && stored[1] === 0 && stored[2] === 0 && stored[3] === 0);
+
+            let xtl = Number.POSITIVE_INFINITY;
+            let ytl = Number.POSITIVE_INFINITY;
+            let xbr = Number.NEGATIVE_INFINITY;
+            let ybr = Number.NEGATIVE_INFINITY;
+            for (const element of this.elements) {
+                const position = element.get(shape.frame);
+                if (position.outside) continue;
+                const pts = position.points as number[];
+                for (let i = 0; i < pts.length; i += 2) {
+                    xtl = Math.min(xtl, pts[i]);
+                    ytl = Math.min(ytl, pts[i + 1]);
+                    xbr = Math.max(xbr, pts[i]);
+                    ybr = Math.max(ybr, pts[i + 1]);
+                }
+            }
+
+            let bbox: number[];
+            if (!Number.isFinite(xtl)) {
+                bbox = stored || [0, 0, 0, 0];
+            } else if (degenerate) {
+                bbox = [
+                    xtl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ytl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    xbr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ybr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                ];
+            } else {
+                bbox = [
+                    Math.min(stored[0], xtl),
+                    Math.min(stored[1], ytl),
+                    Math.max(stored[2], xbr),
+                    Math.max(stored[3], ybr),
+                ];
+            }
+
             return {
                 ...shape,
                 points: [],
@@ -3755,6 +3800,31 @@ export class SkeletonTrack extends Track {
             return [0, 0, 0, 0];
         };
 
+        // Guarantee the displayed bbox contains every visible keypoint at the
+        // target frame (expand only — the annotator-drawn box is a lower
+        // bound). A stored keyframe bbox can legitimately become stale: a
+        // keypoint with a single keyframe is shared across all frames, so
+        // moving it only soft-snaps the edited frame's bbox and leaves OTHER
+        // keyframes (and everything interpolated from them) no longer
+        // wrapping it. There is no single edit-time hook that can keep every
+        // keyframe consistent, so the invariant is enforced here, at the one
+        // place every frame's bbox is derived.
+        const containKeypoints = (bbox: number[]): number[] => {
+            let [xtl, ytl, xbr, ybr] = bbox;
+            for (const element of this.elements) {
+                const position = element.get(targetFrame);
+                if (position.outside) continue;
+                const pts = position.points as number[];
+                for (let i = 0; i < pts.length; i += 2) {
+                    xtl = Math.min(xtl, pts[i]);
+                    ytl = Math.min(ytl, pts[i + 1]);
+                    xbr = Math.max(xbr, pts[i]);
+                    ybr = Math.max(ybr, pts[i + 1]);
+                }
+            }
+            return [xtl, ytl, xbr, ybr];
+        };
+
         if (leftPosition && rightPosition) {
             // Linear interpolation of bbox between two keyframes, mirroring
             // how keypoint positions interpolate elsewhere. Rotation is
@@ -3777,7 +3847,7 @@ export class SkeletonTrack extends Track {
                 zOrder: leftPosition.zOrder,
                 keyframe: targetFrame in this.shapes,
                 points: [],
-                bbox: interpolatedBbox,
+                bbox: containKeypoints(interpolatedBbox),
             };
         }
 
@@ -3791,7 +3861,7 @@ export class SkeletonTrack extends Track {
                 keyframe: targetFrame in this.shapes,
                 outside: singlePosition === rightPosition ? true : singlePosition.outside,
                 points: [],
-                bbox: resolveBbox(singlePosition, frame),
+                bbox: containKeypoints(resolveBbox(singlePosition, frame)),
             };
         }
 
