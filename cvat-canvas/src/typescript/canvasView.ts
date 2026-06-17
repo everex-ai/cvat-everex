@@ -1260,17 +1260,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
         }
 
         if (objState.shapeType === 'skeleton') {
-            const points: number[] = [];
-            objState.elements.forEach((element: any) => {
-                const elementShape = (svgShape as SVG.G).children()
-                    .find((child: SVG.Shape) => (
-                        child.id() === `cvat_canvas_shape_${element.clientID}`
-                    ));
-                if (elementShape) {
-                    points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
-                }
-            });
-            return points;
+            return this.collectSkeletonPoints(objState, svgShape as SVG.G);
         }
 
         let points = readPointsFromShape(svgShape);
@@ -1279,6 +1269,38 @@ export class CanvasViewImpl implements CanvasView, Listener {
             points = this.translatePointsFromRotatedShape(svgShape, points);
         }
         return this.translateFromCanvas(points);
+    }
+
+    // Collect a skeleton's keypoint coordinates (image space) in element
+    // order. When a keypoint has no rendered circle — its sublabel is missing
+    // from the SVG template, so addSkeleton skipped it — fall back to the
+    // element's last-known coords so the array length always matches
+    // state.elements (ObjectState.points rejects a length mismatch).
+    private collectSkeletonPoints(objState: any, svgGroup: SVG.G): number[] {
+        const points: number[] = [];
+        objState.elements.forEach((element: any) => {
+            const elementShape = svgGroup.children()
+                .find((child: SVG.Shape) => child.id() === `cvat_canvas_shape_${element.clientID}`);
+            if (elementShape) {
+                points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
+            } else {
+                points.push(...element.points);
+            }
+        });
+        return points;
+    }
+
+    // Read a skeleton's wrapping rect and return its bbox in image space.
+    private collectSkeletonBbox(svgGroup: SVG.G): number[] | undefined {
+        const wrapRect = svgGroup.children().find((child: SVG.Element) => child.type === 'rect');
+        if (!wrapRect) return undefined;
+        const xtl = +wrapRect.attr('data-xtl');
+        const ytl = +wrapRect.attr('data-ytl');
+        const xbr = +wrapRect.attr('data-xbr');
+        const ybr = +wrapRect.attr('data-ybr');
+        const origin = this.translateFromCanvas([xtl, ytl]);
+        const far = this.translateFromCanvas([xbr, ybr]);
+        return [origin[0], origin[1], far[0], far[1]];
     }
 
     private draggable(
@@ -1388,25 +1410,34 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 const hasMoved = Math.sqrt(dx2 + dy2) > 0;
 
                 if (hasMoved && selectedStartData.size > 0) {
-                    // Multi-drag completion: collect points for all moved shapes
-                    const edits: { state: any; points: number[] }[] = [];
+                    // Multi-drag completion: collect points for all moved shapes.
+                    // For skeletons the wrapping bbox translated with the
+                    // keypoints, so carry it too — otherwise cvat-core seeds the
+                    // soft-snap from the OLD bbox and expands it to span both the
+                    // old and new locations instead of translating it.
+                    const edits: { state: any; points: number[]; bbox?: number[] }[] = [];
+                    const collectEdit = (editState: any, editShape: SVG.Shape): typeof edits[0] => {
+                        const edit: typeof edits[0] = {
+                            state: editState,
+                            points: this.collectShapePoints(editState, editShape),
+                        };
+                        if (editState.shapeType === 'skeleton') {
+                            const bbox = this.collectSkeletonBbox(editShape as SVG.G);
+                            if (bbox) edit.bbox = bbox;
+                        }
+                        return edit;
+                    };
 
-                    // Primary shape points
-                    edits.push({
-                        state,
-                        points: this.collectShapePoints(state, shape),
-                    });
+                    // Primary shape
+                    edits.push(collectEdit(state, shape));
 
-                    // Selected shapes points
+                    // Selected shapes
                     const { objects } = this.controller;
                     for (const [id] of selectedStartData) {
                         const selectedShape = this.svgShapes[id];
                         const selectedObjState = objects.find((obj: any) => obj.clientID === id);
                         if (selectedShape && selectedObjState) {
-                            edits.push({
-                                state: selectedObjState,
-                                points: this.collectShapePoints(selectedObjState, selectedShape),
-                            });
+                            edits.push(collectEdit(selectedObjState, selectedShape));
                         }
                     }
 
@@ -1454,35 +1485,11 @@ export class CanvasViewImpl implements CanvasView, Listener {
                         points.push(x, y, x + shape.width() - 1, y + shape.height() - 1);
                         this.onEditDone(state, points);
                     } else if (state.shapeType === 'skeleton') {
-                        const points = [];
-                        state.elements.forEach((element: any) => {
-                            const elementShape = (shape as SVG.G).children()
-                                .find((child: SVG.Shape) => (
-                                    child.id() === `cvat_canvas_shape_${element.clientID}`
-                                ));
-
-                            if (elementShape) {
-                                points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
-                            }
-                        });
                         // line drag = whole-skeleton translation: emit the bbox
                         // that just got translated alongside the new keypoint
                         // coordinates so cvat-core persists both consistently.
-                        const wrapRect = (shape as any).children()
-                            .find((child: SVG.Element) => child.type === 'rect');
-                        let movedBbox: number[] | undefined;
-                        if (wrapRect) {
-                            const xtl = +wrapRect.attr('data-xtl');
-                            const ytl = +wrapRect.attr('data-ytl');
-                            const xbr = +wrapRect.attr('data-xbr');
-                            const ybr = +wrapRect.attr('data-ybr');
-                            const canvasOrigin = this.translateFromCanvas([xtl, ytl]);
-                            const canvasFar = this.translateFromCanvas([xbr, ybr]);
-                            movedBbox = [
-                                canvasOrigin[0], canvasOrigin[1],
-                                canvasFar[0], canvasFar[1],
-                            ];
-                        }
+                        const points = this.collectSkeletonPoints(state, shape as SVG.G);
+                        const movedBbox = this.collectSkeletonBbox(shape as SVG.G);
                         this.onEditDone(state, points, undefined, movedBbox);
                     } else {
                         // these points does not take into account possible transformations, applied on the element
@@ -1760,37 +1767,9 @@ export class CanvasViewImpl implements CanvasView, Listener {
                             // unrotated coordinates, and any consumer writing
                             // them back would revert the rotation it just
                             // requested.
-                            const points: number[] = [];
-                            if (!rotation) {
-                                state.elements.forEach((element: any) => {
-                                    const elementShape = (shape as SVG.G).children()
-                                        .find((child: SVG.Shape) => (
-                                            child.id() === `cvat_canvas_shape_${element.clientID}`
-                                        ));
-
-                                    if (elementShape) {
-                                        points.push(...this.translateFromCanvas(
-                                            readPointsFromShape(elementShape),
-                                        ));
-                                    }
-                                });
-                            }
-
-                            const wrapRect = (shape as any).children()
-                                .find((child: SVG.Element) => child.type === 'rect');
-                            let resizedBbox: number[] | undefined;
-                            if (wrapRect) {
-                                const xtl = +wrapRect.attr('data-xtl');
-                                const ytl = +wrapRect.attr('data-ytl');
-                                const xbr = +wrapRect.attr('data-xbr');
-                                const ybr = +wrapRect.attr('data-ybr');
-                                const canvasOrigin = this.translateFromCanvas([xtl, ytl]);
-                                const canvasFar = this.translateFromCanvas([xbr, ybr]);
-                                resizedBbox = [
-                                    canvasOrigin[0], canvasOrigin[1],
-                                    canvasFar[0], canvasFar[1],
-                                ];
-                            }
+                            const points: number[] = rotation ?
+                                [] : this.collectSkeletonPoints(state, shape as SVG.G);
+                            const resizedBbox = this.collectSkeletonBbox(shape as SVG.G);
                             this.onEditDone(state, points, rotation, resizedBbox);
                         } else {
                             // these points does not take into account possible transformations, applied on the element

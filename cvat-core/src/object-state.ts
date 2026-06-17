@@ -263,8 +263,8 @@ export default class ObjectState {
                         return [];
                     },
                     set: (points) => {
-                        if (!Array.isArray(points) || points.some((coord) => typeof coord !== 'number')) {
-                            throw new ArgumentError('Points are expected to be an array of numbers.');
+                        if (!Array.isArray(points) || points.some((coord) => !Number.isFinite(coord))) {
+                            throw new ArgumentError('Points are expected to be an array of finite numbers.');
                         }
 
                         if (data.shapeType === ShapeType.SKELETON) {
@@ -314,9 +314,9 @@ export default class ObjectState {
                             );
                         }
                         if (!Array.isArray(bbox) || bbox.length !== 4 ||
-                            bbox.some((coord) => typeof coord !== 'number')) {
+                            bbox.some((coord) => !Number.isFinite(coord))) {
                             throw new ArgumentError(
-                                'bbox must be a 4-element number array [xtl, ytl, xbr, ybr].',
+                                'bbox must be a 4-element array of finite numbers [xtl, ytl, xbr, ybr].',
                             );
                         }
                         data.updateFlags.bbox = true;

@@ -3376,7 +3376,7 @@ export class SkeletonTrack extends Track {
             }
 
             let bbox: number[];
-            if (!Number.isFinite(xtl)) {
+            if (![xtl, ytl, xbr, ybr].every(Number.isFinite)) {
                 bbox = stored || [0, 0, 0, 0];
             } else if (degenerate) {
                 bbox = [
@@ -3398,6 +3398,11 @@ export class SkeletonTrack extends Track {
                 ...shape,
                 points: [],
                 bbox,
+                // Skeleton rotation is always baked into child keypoints; the
+                // parent must never carry a non-zero rotation. Force it to 0
+                // here so legacy/interim data that stored a parent rotation
+                // does not round-trip it back to the server on export.
+                rotation: 0,
             };
         });
 
@@ -3789,7 +3794,7 @@ export class SkeletonTrack extends Track {
                     ybr = Math.max(ybr, pts[i + 1]);
                 }
             }
-            if (Number.isFinite(xtl)) {
+            if ([xtl, ytl, xbr, ybr].every(Number.isFinite)) {
                 return [
                     xtl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
                     ytl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,

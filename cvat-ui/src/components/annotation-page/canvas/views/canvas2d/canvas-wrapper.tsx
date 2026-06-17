@@ -941,9 +941,14 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
     private onCanvasMultiEdited = (event: any): void => {
         const { onUpdateMultipleAnnotations } = this.props;
         const { edits } = event.detail;
-        const statesToUpdate = edits.map((edit: { state: any; points: number[] }) => {
+        const statesToUpdate = edits.map((edit: { state: any; points: number[]; bbox?: number[] }) => {
             const updatedState = edit.state;
             updatedState.points = edit.points;
+            // Skeletons carry the translated wrapping bbox so it moves with the
+            // keypoints instead of expanding to cover the old + new positions.
+            if (updatedState.shapeType === 'skeleton' && Array.isArray(edit.bbox) && edit.bbox.length === 4) {
+                updatedState.bbox = edit.bbox;
+            }
             return updatedState;
         });
         onUpdateMultipleAnnotations(statesToUpdate);

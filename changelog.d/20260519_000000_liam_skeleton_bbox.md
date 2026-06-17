@@ -51,6 +51,20 @@
 
 ### Fixed
 
+- skeleton을 다른 객체와 다중선택해 드래그(multi-drag)하면 wrapping bbox가
+  따라 이동하지 않고 옛 위치+새 위치를 모두 포함해 비대해지던 문제 수정.
+  `canvas.multiedited` payload에 skeleton bbox를 포함하고 `onCanvasMultiEdited`
+  가 이를 적용해, 멀티드래그 시에도 bbox가 keypoint와 함께 평행이동.
+- skeleton track export 시 parent keyframe의 (구버전 데이터에서 유래한) 0이
+  아닌 rotation이 그대로 서버로 round-trip되던 문제 수정 (`toJSON`이 parent
+  rotation을 항상 0으로). skeleton 회전은 child keypoint에 baked.
+- skeleton keypoint가 SVG 템플릿에 없어 렌더에서 스킵될 때, 이후 드래그
+  저장이 point 개수 불일치로 크래시하던 잠재 버그 수정 (스킵된 keypoint는
+  마지막 좌표로 채워 개수 정합 유지).
+- skeleton bbox/points에 비유한(NaN/Infinity) 좌표가 들어오면 NaN bbox로
+  표시/export되던 방어 공백 수정 (`ObjectState` setter 및 보간/export의
+  finite 검사 강화).
+
 - skeleton track 보간에서 keyframe의 bbox가 degenerate `[0,0,0,0]`(미영속)
   이면, 그 0값을 그대로 선형보간해 이미지 원점에서 자라나는 작은 박스가
   keypoint를 벗어나던 문제 수정. 예: 첫 keyframe은 bbox 미설정 상태로 두고
