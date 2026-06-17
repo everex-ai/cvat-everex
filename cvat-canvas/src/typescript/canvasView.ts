@@ -282,6 +282,11 @@ export class CanvasViewImpl implements CanvasView, Listener {
             } else if (shapeType === 'skeleton') {
                 drawnShape.rotate(0);
                 for (const child of (drawnShape as SVG.G).children()) {
+                    if (child.type === 'circle' || child.type === 'line') {
+                        // drop transient rotation transforms left by an
+                        // aborted rotation gesture
+                        child.untransform();
+                    }
                     if (child.type === 'circle') {
                         const childClientID = child.attr('data-client-id');
                         const element = drawnState.elements.find((el: any) => el.clientID === childClientID);
@@ -1255,17 +1260,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
         }
 
         if (objState.shapeType === 'skeleton') {
-            const points: number[] = [];
-            objState.elements.forEach((element: any) => {
-                const elementShape = (svgShape as SVG.G).children()
-                    .find((child: SVG.Shape) => (
-                        child.id() === `cvat_canvas_shape_${element.clientID}`
-                    ));
-                if (elementShape) {
-                    points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
-                }
-            });
-            return points;
+            return this.collectSkeletonPoints(objState, svgShape as SVG.G);
         }
 
         let points = readPointsFromShape(svgShape);
@@ -1274,6 +1269,38 @@ export class CanvasViewImpl implements CanvasView, Listener {
             points = this.translatePointsFromRotatedShape(svgShape, points);
         }
         return this.translateFromCanvas(points);
+    }
+
+    // Collect a skeleton's keypoint coordinates (image space) in element
+    // order. When a keypoint has no rendered circle — its sublabel is missing
+    // from the SVG template, so addSkeleton skipped it — fall back to the
+    // element's last-known coords so the array length always matches
+    // state.elements (ObjectState.points rejects a length mismatch).
+    private collectSkeletonPoints(objState: any, svgGroup: SVG.G): number[] {
+        const points: number[] = [];
+        objState.elements.forEach((element: any) => {
+            const elementShape = svgGroup.children()
+                .find((child: SVG.Shape) => child.id() === `cvat_canvas_shape_${element.clientID}`);
+            if (elementShape) {
+                points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
+            } else {
+                points.push(...element.points);
+            }
+        });
+        return points;
+    }
+
+    // Read a skeleton's wrapping rect and return its bbox in image space.
+    private collectSkeletonBbox(svgGroup: SVG.G): number[] | undefined {
+        const wrapRect = svgGroup.children().find((child: SVG.Element) => child.type === 'rect');
+        if (!wrapRect) return undefined;
+        const xtl = +wrapRect.attr('data-xtl');
+        const ytl = +wrapRect.attr('data-ytl');
+        const xbr = +wrapRect.attr('data-xbr');
+        const ybr = +wrapRect.attr('data-ybr');
+        const origin = this.translateFromCanvas([xtl, ytl]);
+        const far = this.translateFromCanvas([xbr, ybr]);
+        return [origin[0], origin[1], far[0], far[1]];
     }
 
     private draggable(
@@ -1383,25 +1410,34 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 const hasMoved = Math.sqrt(dx2 + dy2) > 0;
 
                 if (hasMoved && selectedStartData.size > 0) {
-                    // Multi-drag completion: collect points for all moved shapes
-                    const edits: { state: any; points: number[] }[] = [];
+                    // Multi-drag completion: collect points for all moved shapes.
+                    // For skeletons the wrapping bbox translated with the
+                    // keypoints, so carry it too — otherwise cvat-core seeds the
+                    // soft-snap from the OLD bbox and expands it to span both the
+                    // old and new locations instead of translating it.
+                    const edits: { state: any; points: number[]; bbox?: number[] }[] = [];
+                    const collectEdit = (editState: any, editShape: SVG.Shape): typeof edits[0] => {
+                        const edit: typeof edits[0] = {
+                            state: editState,
+                            points: this.collectShapePoints(editState, editShape),
+                        };
+                        if (editState.shapeType === 'skeleton') {
+                            const bbox = this.collectSkeletonBbox(editShape as SVG.G);
+                            if (bbox) edit.bbox = bbox;
+                        }
+                        return edit;
+                    };
 
-                    // Primary shape points
-                    edits.push({
-                        state,
-                        points: this.collectShapePoints(state, shape),
-                    });
+                    // Primary shape
+                    edits.push(collectEdit(state, shape));
 
-                    // Selected shapes points
+                    // Selected shapes
                     const { objects } = this.controller;
                     for (const [id] of selectedStartData) {
                         const selectedShape = this.svgShapes[id];
                         const selectedObjState = objects.find((obj: any) => obj.clientID === id);
                         if (selectedShape && selectedObjState) {
-                            edits.push({
-                                state: selectedObjState,
-                                points: this.collectShapePoints(selectedObjState, selectedShape),
-                            });
+                            edits.push(collectEdit(selectedObjState, selectedShape));
                         }
                     }
 
@@ -1449,35 +1485,11 @@ export class CanvasViewImpl implements CanvasView, Listener {
                         points.push(x, y, x + shape.width() - 1, y + shape.height() - 1);
                         this.onEditDone(state, points);
                     } else if (state.shapeType === 'skeleton') {
-                        const points = [];
-                        state.elements.forEach((element: any) => {
-                            const elementShape = (shape as SVG.G).children()
-                                .find((child: SVG.Shape) => (
-                                    child.id() === `cvat_canvas_shape_${element.clientID}`
-                                ));
-
-                            if (elementShape) {
-                                points.push(...this.translateFromCanvas(readPointsFromShape(elementShape)));
-                            }
-                        });
                         // line drag = whole-skeleton translation: emit the bbox
                         // that just got translated alongside the new keypoint
                         // coordinates so cvat-core persists both consistently.
-                        const wrapRect = (shape as any).children()
-                            .find((child: SVG.Element) => child.type === 'rect');
-                        let movedBbox: number[] | undefined;
-                        if (wrapRect) {
-                            const xtl = +wrapRect.attr('data-xtl');
-                            const ytl = +wrapRect.attr('data-ytl');
-                            const xbr = +wrapRect.attr('data-xbr');
-                            const ybr = +wrapRect.attr('data-ybr');
-                            const canvasOrigin = this.translateFromCanvas([xtl, ytl]);
-                            const canvasFar = this.translateFromCanvas([xbr, ybr]);
-                            movedBbox = [
-                                canvasOrigin[0], canvasOrigin[1],
-                                canvasFar[0], canvasFar[1],
-                            ];
-                        }
+                        const points = this.collectSkeletonPoints(state, shape as SVG.G);
+                        const movedBbox = this.collectSkeletonBbox(shape as SVG.G);
                         this.onEditDone(state, points, undefined, movedBbox);
                     } else {
                         // these points does not take into account possible transformations, applied on the element
@@ -1591,6 +1603,21 @@ export class CanvasViewImpl implements CanvasView, Listener {
             let resized = false;
             let aborted = false;
             let start = Date.now();
+            // Final angle of an ongoing skeleton rotation gesture. Skeleton
+            // rotation is visualized with transient transforms on keypoint
+            // circles and edge lines only — the group and the wrapping rect
+            // are never rotated (the bbox stays an axis-aligned rectangle by
+            // definition), so the angle cannot be read back from the group
+            // transform on resizedone and must be tracked here. On mouseup
+            // cvat-core bakes the angle into keypoint coordinates.
+            let skeletonGestureRotation = 0;
+
+            // make attaching idempotent — re-activation must never stack a
+            // second set of handlers on the same element
+            (resizableInstance as any).off('resizestart');
+            (resizableInstance as any).off('resizing');
+            (resizableInstance as any).off('resizedone');
+            (resizableInstance as any).off('resizeabort');
 
             (resizableInstance as any)
                 .resize({
@@ -1601,6 +1628,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     onResizeStart();
                     resized = false;
                     start = Date.now();
+                    skeletonGestureRotation = 0;
                     this.resizableShape = shape;
                 })
                 .on('resizing', (e: CustomEvent): void => {
@@ -1610,10 +1638,16 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     if (state.shapeType === 'skeleton' && e.target) {
                         const { instance } = e.target as any;
 
-                        // Rotation handle still drives the parent skeleton's
-                        // SVG rotation; the bbox stays axis-aligned.
+                        // svg.resize rotates the wrapping rect itself on
+                        // rotation-handle drag. Undo that — the bbox stays an
+                        // axis-aligned rectangle; keypoints and edges get a
+                        // transient visual rotation around the bbox center
+                        // below instead.
                         const { rotation } = resizableInstance.transform();
-                        shape.rotate(rotation);
+                        skeletonGestureRotation = rotation;
+                        if (rotation) {
+                            resizableInstance.rotate(0);
+                        }
 
                         let [x, y] = [instance.x(), instance.y()];
                         let width = instance.width();
@@ -1682,6 +1716,24 @@ export class CanvasViewImpl implements CanvasView, Listener {
                         resized = true;
                         skeletonSVGTemplate = skeletonSVGTemplate ?? makeSVGFromTemplate(state.label.structure.svg);
                         setupSkeletonEdges(shape as SVG.G, skeletonSVGTemplate);
+
+                        // Transient visual rotation of keypoints and skeleton
+                        // edges around the bbox center while the rotation
+                        // handle is being dragged. The wrapping rect stays
+                        // upright. The transforms disappear with the full
+                        // redraw after mouseup, when the angle has been baked
+                        // into the keypoint coordinates by cvat-core.
+                        const pivotX = x + width / 2;
+                        const pivotY = y + height / 2;
+                        for (const child of (shape as SVG.G).children()) {
+                            if (child.type === 'circle' || child.type === 'line') {
+                                if (skeletonGestureRotation) {
+                                    child.rotate(skeletonGestureRotation, pivotX, pivotY);
+                                } else {
+                                    child.untransform();
+                                }
+                            }
+                        }
                     }
                 })
                 .on('resizedone', (): void => {
@@ -1694,47 +1746,30 @@ export class CanvasViewImpl implements CanvasView, Listener {
                     this.resizableShape = null;
 
                     // be sure, that rotation in range [0; 360]
-                    let rotation = getRoundedRotation(shape);
+                    // (skeleton: the group is never rotated — the gesture
+                    // angle was tracked in skeletonGestureRotation and will be
+                    // baked into keypoint coordinates by cvat-core)
+                    let rotation = state.shapeType === 'skeleton' ?
+                        Math.round(skeletonGestureRotation) :
+                        getRoundedRotation(shape);
                     while (rotation < 0) rotation += 360;
                     rotation %= 360;
 
                     if (resized) {
                         if (state.shapeType === 'skeleton') {
-                            // Bbox-only resize: keypoints stayed put, only the
-                            // wrapping rect changed (and possibly the parent
-                            // rotation via the rotation handle). Emit the new
-                            // bbox in canvas-space; element points are passed
-                            // through unchanged so cvat-core knows this edit
-                            // does not touch keypoints.
-                            const points: number[] = [];
-                            state.elements.forEach((element: any) => {
-                                const elementShape = (shape as SVG.G).children()
-                                    .find((child: SVG.Shape) => (
-                                        child.id() === `cvat_canvas_shape_${element.clientID}`
-                                    ));
-
-                                if (elementShape) {
-                                    points.push(...this.translateFromCanvas(
-                                        readPointsFromShape(elementShape),
-                                    ));
-                                }
-                            });
-
-                            const wrapRect = (shape as any).children()
-                                .find((child: SVG.Element) => child.type === 'rect');
-                            let resizedBbox: number[] | undefined;
-                            if (wrapRect) {
-                                const xtl = +wrapRect.attr('data-xtl');
-                                const ytl = +wrapRect.attr('data-ytl');
-                                const xbr = +wrapRect.attr('data-xbr');
-                                const ybr = +wrapRect.attr('data-ybr');
-                                const canvasOrigin = this.translateFromCanvas([xtl, ytl]);
-                                const canvasFar = this.translateFromCanvas([xbr, ybr]);
-                                resizedBbox = [
-                                    canvasOrigin[0], canvasOrigin[1],
-                                    canvasFar[0], canvasFar[1],
-                                ];
-                            }
+                            // Corner/edge resize: keypoints stayed put, only
+                            // the wrapping rect changed. Rotation handle: the
+                            // angle is emitted and baked into keypoints in
+                            // cvat-core; the bbox stays axis-aligned (it only
+                            // auto-expands there if rotated keypoints exceed
+                            // it). A rotation gesture must emit EMPTY points:
+                            // the canvas-side circle attributes are the
+                            // unrotated coordinates, and any consumer writing
+                            // them back would revert the rotation it just
+                            // requested.
+                            const points: number[] = rotation ?
+                                [] : this.collectSkeletonPoints(state, shape as SVG.G);
+                            const resizedBbox = this.collectSkeletonBbox(shape as SVG.G);
                             this.onEditDone(state, points, rotation, resizedBbox);
                         } else {
                             // these points does not take into account possible transformations, applied on the element
@@ -1770,11 +1805,17 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 resizableInstance.fire('resizeabort');
             }
 
-            (shape as any).off('resizestart');
-            (shape as any).off('resizing');
-            (shape as any).off('resizedone');
-            (shape as any).off('resizeabort');
-            (shape as any).resize('stop');
+            // detach from resizableInstance, not shape: for skeletons the
+            // resize events live on the wrapping rect (a child of the group).
+            // Detaching from the group left the rect listeners in place, so
+            // every activate/deactivate cycle stacked one more set of
+            // handlers — a single mouseup then fired resizedone N times,
+            // and the duplicate events corrupted the annotation
+            (resizableInstance as any).off('resizestart');
+            (resizableInstance as any).off('resizing');
+            (resizableInstance as any).off('resizedone');
+            (resizableInstance as any).off('resizeabort');
+            (resizableInstance as any).resize('stop');
         }
     }
 
@@ -3879,6 +3920,17 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 }
 
                 const templateElement = templateElements.find((el: SVG.Circle) => el.attr('data-label-id') === element.label.id);
+                if (!templateElement) {
+                    // a label whose SVG template does not reference this
+                    // sublabel (e.g. created/edited via raw API) must not
+                    // crash the whole canvas — skip the keypoint instead
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        `Skeleton sublabel #${element.label.id} (${element.label.name}) ` +
+                        'is missing in the skeleton SVG template, its keypoint was skipped',
+                    );
+                    continue;
+                }
                 const circle = skeleton.circle()
                     .center(cx, cy)
                     .attr({
@@ -4031,6 +4083,12 @@ export class CanvasViewImpl implements CanvasView, Listener {
         if (state.hidden || state.outside || this.isInnerHidden(state.clientID)) {
             skeleton.addClass('cvat_canvas_hidden');
         }
+
+        // NOTE: no rotation transform is applied here on purpose. Skeleton
+        // rotation is always baked into the keypoint coordinates on save
+        // (state.rotation stays 0) and the wrapping rect is an axis-aligned
+        // rectangle by definition — nothing in a skeleton ever carries a
+        // persistent SVG rotation.
 
         (skeleton as any).selectize = (enabled: boolean) => {
             this.selectize(enabled, wrappingRect);

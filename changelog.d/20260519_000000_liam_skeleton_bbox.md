@@ -26,11 +26,12 @@
     bbox를 안 보낸 write 요청. 캔버스/export가 keypoint extent로 폴백하고, 첫
     편집 시 soft-snap으로 영속화)
   - 그 외 입력 (zero-area non-degenerate, 역전된 좌표, len≠4)은 모두 400.
-- skeleton 회전 의미 변경: 기존엔 `Shape.rotation`을 항상 0으로 강제하고
-  child keypoint 좌표를 직접 회전시켰음. 이제 `Shape.rotation`이 의미 있는
-  스칼라로 보존되고, child keypoint는 변형되지 않으며, 캔버스가 SVG
-  transform으로 시각적 회전을 처리. 데이터셋 export (CVAT XML, COCO,
-  Datumaro)도 skeleton rotation을 보존.
+- skeleton 회전: 회전은 child keypoint 좌표에 즉시 베이크되고
+  (`Shape.rotation`은 skeleton에서 항상 0), **bbox는 회전하지 않고 항상
+  axis-aligned 직사각형을 유지**. 회전 피벗은 저장된 bbox 중심(없으면
+  keypoint extent 중심). 회전된 keypoint가 기존 bbox를 벗어나면 bbox가
+  자동 확장되며(soft-snap), 절대 회전/축소되지 않음. 회전 제스처 중에는
+  keypoint와 edge만 시각적으로 회전하고 wrapping rect는 upright 유지.
 - skeleton 빨간 박스 corner/edge 핸들 드래그가 **bbox만** 변경하도록 의미
   재정의. 이전엔 모든 keypoint를 박스 변화에 비례해 스케일했음. line 드래그
   (테두리 잡기)는 기존 동작 유지 — bbox + keypoints가 함께 평행이동.
@@ -50,6 +51,55 @@
 
 ### Fixed
 
+- skeleton을 다른 객체와 다중선택해 드래그(multi-drag)하면 wrapping bbox가
+  따라 이동하지 않고 옛 위치+새 위치를 모두 포함해 비대해지던 문제 수정.
+  `canvas.multiedited` payload에 skeleton bbox를 포함하고 `onCanvasMultiEdited`
+  가 이를 적용해, 멀티드래그 시에도 bbox가 keypoint와 함께 평행이동.
+- skeleton track export 시 parent keyframe의 (구버전 데이터에서 유래한) 0이
+  아닌 rotation이 그대로 서버로 round-trip되던 문제 수정 (`toJSON`이 parent
+  rotation을 항상 0으로). skeleton 회전은 child keypoint에 baked.
+- skeleton keypoint가 SVG 템플릿에 없어 렌더에서 스킵될 때, 이후 드래그
+  저장이 point 개수 불일치로 크래시하던 잠재 버그 수정 (스킵된 keypoint는
+  마지막 좌표로 채워 개수 정합 유지).
+- skeleton bbox/points에 비유한(NaN/Infinity) 좌표가 들어오면 NaN bbox로
+  표시/export되던 방어 공백 수정 (`ObjectState` setter 및 보간/export의
+  finite 검사 강화).
+
+- skeleton track 보간에서 keyframe의 bbox가 degenerate `[0,0,0,0]`(미영속)
+  이면, 그 0값을 그대로 선형보간해 이미지 원점에서 자라나는 작은 박스가
+  keypoint를 벗어나던 문제 수정. 예: 첫 keyframe은 bbox 미설정 상태로 두고
+  뒤쪽 keyframe에서만 bbox를 그리면 그 사이 프레임 전체의 박스가 좌상단으로
+  어긋남. 이제 `getPosition`이 보간 전에 degenerate bbox를 해당 keyframe의
+  keypoint extent(+margin)로 해석해, 모든 프레임에서 박스가 keypoint를 감쌈.
+- skeleton track에서 keypoint가 bbox 밖으로 나가도 박스가 따라가지 않던
+  문제 수정. single-keyframe keypoint는 전 프레임에 공유되는데 parent bbox
+  keyframe은 독립적이라, 한 프레임에서 그 keypoint를 옮기면 그 프레임의
+  bbox만 soft-snap되고 다른 keyframe(및 그로부터 보간된 모든 프레임)의
+  bbox는 stale하게 남아 keypoint가 박스 밖으로 삐져나옴. 어떤 단일 편집
+  훅으로도 모든 keyframe을 일관되게 유지할 수 없으므로, bbox가 도출되는
+  단일 지점인 `getPosition`에서 표시 bbox가 항상 그 프레임의 visible
+  keypoint를 감싸도록(확장-only) 보장. export(`toJSON`)도 각 keyframe의
+  bbox를 그 keypoint를 감싸도록 확장해 재import 후 보간 정합성 유지.
+- skeleton 편집(전체 이동/리사이즈/keypoint 이동) 1회가 히스토리 엔트리
+  2~3개로 쪼개져 undo를 여러 번 눌러야 하고, 중간 단계에서 bbox만 따로
+  복원되어 객체에서 벗어나 보이던 문제 수정. keypoint와 bbox 변경이 단일
+  히스토리 엔트리로 통합되어 undo/redo 1회로 함께 복원됨. element 편집은
+  부모 skeleton 1회 저장으로 합쳐져(이중 저장 제거) keypoint 이동 시
+  soft-snap bbox 확장도 정상 동작.
+- skeleton element 일괄 갱신(updateElements)이 부분집합을 위치 인덱스로
+  매칭해 잘못된 element를 갱신할 수 있던 잠재 버그 수정 (clientID 매칭).
+- label의 skeleton SVG 구조와 sublabel이 불일치할 때(`data-label-id` 누락
+  등) 캔버스 전체가 TypeError로 죽던 문제 수정 — 해당 keypoint만 건너뛰고
+  콘솔 경고를 남김.
+
+- skeleton rotation이 마우스를 놓는 순간 사라지던 문제 수정: 회전이 어떤
+  영속 상태에도 반영되지 않았음. 이제 마우스업 시 cvat-core가 회전을
+  keypoint 좌표에 베이크하고 필요 시 bbox를 확장. 제스처 중 wrapping
+  rect가 마름모꼴로 기울던 표시도 제거(항상 upright).
+- skeleton track의 per-frame bbox가 implicit keyframe 생성(`copyShape`)과
+  서버 reload(`convertTrackedShape`) 경로에서 유실되던 문제 수정. 보간
+  frame에서 회전/편집해도 keyframe bbox가 보존되고, 새로고침 후에도 저장된
+  bbox가 유지됨.
 - Datumaro IR을 통한 skeleton transport에서 reserved-prefix attribute
   `__cvat_bbox` 사용. `quality_control` 의 `ignored_attrs` 와
   `consensus` merge 경로에서 이 attribute를 자동 제외해 transport metadata
