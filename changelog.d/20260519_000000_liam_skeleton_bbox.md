@@ -51,6 +51,12 @@
 
 ### Fixed
 
+- skeleton track 보간에서 keyframe의 bbox가 degenerate `[0,0,0,0]`(미영속)
+  이면, 그 0값을 그대로 선형보간해 이미지 원점에서 자라나는 작은 박스가
+  keypoint를 벗어나던 문제 수정. 예: 첫 keyframe은 bbox 미설정 상태로 두고
+  뒤쪽 keyframe에서만 bbox를 그리면 그 사이 프레임 전체의 박스가 좌상단으로
+  어긋남. 이제 `getPosition`이 보간 전에 degenerate bbox를 해당 keyframe의
+  keypoint extent(+margin)로 해석해, 모든 프레임에서 박스가 keypoint를 감쌈.
 - skeleton 편집(전체 이동/리사이즈/keypoint 이동) 1회가 히스토리 엔트리
   2~3개로 쪼개져 undo를 여러 번 눌러야 하고, 중간 단계에서 bbox만 따로
   복원되어 객체에서 벗어나 보이던 문제 수정. keypoint와 bbox 변경이 단일

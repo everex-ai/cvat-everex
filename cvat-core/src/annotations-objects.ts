@@ -3715,9 +3715,44 @@ export class SkeletonTrack extends Track {
         const rightPosition = Number.isInteger(rightKeyframe) ? this.shapes[rightKeyframe] : null;
         const leftPosition = Number.isInteger(leftFrame) ? this.shapes[leftFrame] : null;
 
-        const bboxOf = (shape: any): number[] => {
+        // Resolve a keyframe's bbox for interpolation. A degenerate/empty
+        // bbox ([0,0,0,0] or missing) means "not persisted — fall back to the
+        // keypoint extent". It must be resolved to that extent BEFORE
+        // interpolating: interpolating the literal zeros produces a small box
+        // growing out of the image origin that no longer wraps the keypoints
+        // (e.g. a first keyframe left at [0,0,0,0] while a later keyframe got
+        // a real bbox). Mirrors the SkeletonShape constructor / addSkeleton
+        // fallback (keypoint min/max + margin).
+        const SKELETON_TRACK_BBOX_FALLBACK_MARGIN = 20;
+        const resolveBbox = (shape: any, frame: number): number[] => {
             const b = shape && shape.bbox;
-            return Array.isArray(b) && b.length === 4 ? b : [0, 0, 0, 0];
+            const valid = Array.isArray(b) && b.length === 4 &&
+                !(b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 0);
+            if (valid) return b;
+            let xtl = Number.POSITIVE_INFINITY;
+            let ytl = Number.POSITIVE_INFINITY;
+            let xbr = Number.NEGATIVE_INFINITY;
+            let ybr = Number.NEGATIVE_INFINITY;
+            for (const element of this.elements) {
+                const position = element.get(frame);
+                if (position.outside) continue;
+                const pts = position.points as number[];
+                for (let i = 0; i < pts.length; i += 2) {
+                    xtl = Math.min(xtl, pts[i]);
+                    ytl = Math.min(ytl, pts[i + 1]);
+                    xbr = Math.max(xbr, pts[i]);
+                    ybr = Math.max(ybr, pts[i + 1]);
+                }
+            }
+            if (Number.isFinite(xtl)) {
+                return [
+                    xtl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ytl - SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    xbr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                    ybr + SKELETON_TRACK_BBOX_FALLBACK_MARGIN,
+                ];
+            }
+            return [0, 0, 0, 0];
         };
 
         if (leftPosition && rightPosition) {
@@ -3725,8 +3760,8 @@ export class SkeletonTrack extends Track {
             // how keypoint positions interpolate elsewhere. Rotation is
             // always 0 for skeletons: it bakes into keypoint coordinates on
             // save and is never carried as a state.
-            const leftBbox = bboxOf(leftPosition);
-            const rightBbox = bboxOf(rightPosition);
+            const leftBbox = resolveBbox(leftPosition, leftFrame as number);
+            const rightBbox = resolveBbox(rightPosition, rightKeyframe as number);
             const span = (rightKeyframe as number) - (leftFrame as number);
             const t = span > 0 ? (targetFrame - (leftFrame as number)) / span : 0;
             const interpolatedBbox = [
@@ -3748,6 +3783,7 @@ export class SkeletonTrack extends Track {
 
         const singlePosition = leftPosition || rightPosition;
         if (singlePosition) {
+            const frame = singlePosition === leftPosition ? (leftFrame as number) : (rightKeyframe as number);
             return {
                 rotation: 0,
                 occluded: singlePosition.occluded,
@@ -3755,7 +3791,7 @@ export class SkeletonTrack extends Track {
                 keyframe: targetFrame in this.shapes,
                 outside: singlePosition === rightPosition ? true : singlePosition.outside,
                 points: [],
-                bbox: bboxOf(singlePosition),
+                bbox: resolveBbox(singlePosition, frame),
             };
         }
 
