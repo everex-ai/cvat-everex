@@ -3293,10 +3293,6 @@ export class CanvasViewImpl implements CanvasView, Listener {
         }
         this.updateTextPosition(this.svgTexts[clientID]);
 
-        if (this.stateIsLocked(state)) {
-            return;
-        }
-
         if (state.shapeType === 'points') {
             this.svgShapes[clientID]
                 .remember('_selectHandler').nested
@@ -3317,88 +3313,93 @@ export class CanvasViewImpl implements CanvasView, Listener {
             this.content.append(shape.node);
         }
 
-        const { showProjections } = this.configuration;
-        if (state.shapeType === 'cuboid' && showProjections) {
-            (shape as any).attr('projections', true);
-        }
+        // locked/review-mode shapes only get the visual activation feedback
+        // above (highlight, z-order raise, skeleton wrapping rect via CSS),
+        // none of the edit wiring below (selectize/resizable/draggable)
+        if (!this.stateIsLocked(state)) {
+            const { showProjections } = this.configuration;
+            if (state.shapeType === 'cuboid' && showProjections) {
+                (shape as any).attr('projections', true);
+            }
 
-        if (state.shapeType !== 'points') {
-            this.selectize(true, shape);
-        }
+            if (state.shapeType !== 'points') {
+                this.selectize(true, shape);
+            }
 
-        const textList = [
-            state.clientID, ...state.elements.map((element: any): number => element.clientID),
-        ].map((id: number) => this.svgTexts[id]).filter((text: SVG.Text | undefined) => (
-            typeof text !== 'undefined'
-        ));
+            const textList = [
+                state.clientID, ...state.elements.map((element: any): number => element.clientID),
+            ].map((id: number) => this.svgTexts[id]).filter((text: SVG.Text | undefined) => (
+                typeof text !== 'undefined'
+            ));
 
-        const hideText = (): void => {
-            textList.forEach((text: SVG.Text) => {
-                text.addClass('cvat_canvas_hidden');
-            });
-        };
-
-        const showText = (): void => {
-            textList.forEach((text: SVG.Text) => {
-                text.removeClass('cvat_canvas_hidden');
-                this.updateTextPosition(text);
-            });
-        };
-
-        if (state.shapeType !== 'mask') {
-            const showDirection = (): void => {
-                if (['polygon', 'polyline'].includes(state.shapeType)) {
-                    this.showDirection(state, shape as SVG.Polygon | SVG.PolyLine);
-                }
+            const hideText = (): void => {
+                textList.forEach((text: SVG.Text) => {
+                    text.addClass('cvat_canvas_hidden');
+                });
             };
 
-            const hideDirection = (): void => {
-                if (['polygon', 'polyline'].includes(state.shapeType)) {
-                    this.hideDirection(shape as SVG.Polygon | SVG.PolyLine);
-                }
+            const showText = (): void => {
+                textList.forEach((text: SVG.Text) => {
+                    text.removeClass('cvat_canvas_hidden');
+                    this.updateTextPosition(text);
+                });
             };
 
-            let shapeSizeElement: ShapeSizeElement | null = null;
-            this.resizable(state, shape, () => {
-                this.mode = Mode.RESIZE;
-                hideDirection();
-                hideText();
-                if (state.shapeType === 'rectangle' || state.shapeType === 'ellipse') {
-                    shapeSizeElement = displayShapeSize(this.adoptedContent, this.adoptedText);
-                }
-            }, () => {
-                if (shapeSizeElement) {
-                    shapeSizeElement.update(shape);
-                }
-            }, () => {
-                this.mode = Mode.IDLE;
-                if (shapeSizeElement) {
-                    shapeSizeElement.rm();
-                    shapeSizeElement = null;
-                }
+            if (state.shapeType !== 'mask') {
+                const showDirection = (): void => {
+                    if (['polygon', 'polyline'].includes(state.shapeType)) {
+                        this.showDirection(state, shape as SVG.Polygon | SVG.PolyLine);
+                    }
+                };
+
+                const hideDirection = (): void => {
+                    if (['polygon', 'polyline'].includes(state.shapeType)) {
+                        this.hideDirection(shape as SVG.Polygon | SVG.PolyLine);
+                    }
+                };
+
+                let shapeSizeElement: ShapeSizeElement | null = null;
+                this.resizable(state, shape, () => {
+                    this.mode = Mode.RESIZE;
+                    hideDirection();
+                    hideText();
+                    if (state.shapeType === 'rectangle' || state.shapeType === 'ellipse') {
+                        shapeSizeElement = displayShapeSize(this.adoptedContent, this.adoptedText);
+                    }
+                }, () => {
+                    if (shapeSizeElement) {
+                        shapeSizeElement.update(shape);
+                    }
+                }, () => {
+                    this.mode = Mode.IDLE;
+                    if (shapeSizeElement) {
+                        shapeSizeElement.rm();
+                        shapeSizeElement = null;
+                    }
+
+                    showDirection();
+                    showText();
+                });
 
                 showDirection();
-                showText();
-            });
+            } else {
+                (shape as any).on('dblclick', (e: MouseEvent) => {
+                    if (e.shiftKey) {
+                        this.controller.edit({ enabled: true, state });
+                        e.stopPropagation();
+                    }
+                });
+            }
 
-            showDirection();
-        } else {
-            (shape as any).on('dblclick', (e: MouseEvent) => {
-                if (e.shiftKey) {
-                    this.controller.edit({ enabled: true, state });
-                    e.stopPropagation();
-                }
-            });
-        }
-
-        if (!state.pinned) {
-            this.draggable(state, shape, () => {
-                this.mode = Mode.DRAG;
-                hideText();
-            }, () => {}, () => {
-                this.mode = Mode.IDLE;
-                showText();
-            });
+            if (!state.pinned) {
+                this.draggable(state, shape, () => {
+                    this.mode = Mode.DRAG;
+                    hideText();
+                }, () => {}, () => {
+                    this.mode = Mode.IDLE;
+                    showText();
+                });
+            }
         }
 
         this.canvas.dispatchEvent(

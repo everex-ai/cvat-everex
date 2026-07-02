@@ -17,7 +17,8 @@ CVAT (Computer Vision Annotation Tool) is an interactive video and image annotat
 
 ## Git Workflow
 
-- **Main branch**: `main` (PRs should target this branch)
+- **GitHub repo**: `everex-ai/mlops-imagelab` (renamed from `everex-ai/cvat-everex`). The `origin` remote may still use the old URL — `git push`/`pull` follow GitHub's redirect, but `gh pr create` fails against the old name; pass `-R everex-ai/mlops-imagelab` or update the remote URL.
+- **Working branch**: `main` (Everex PRs target this branch). The GitHub default branch (`origin/HEAD`) is `develop`, inherited from upstream — always pass `--base main` explicitly when creating PRs.
 - **Upstream**: `https://github.com/cvat-ai/cvat.git` (official CVAT repo)
 - **Git hooks**: Lefthook runs `lint-staged` on pre-commit for `*.{js,jsx,ts,tsx}` files
 
@@ -30,12 +31,20 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 # Rebuild and start (after code changes)
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+# Run on a local workstation at http://localhost:8081 — add the local override
+# (untracked docker-compose.local.yml: re-points prod bind mounts to ~/cvat-everex-data,
+# rewrites Traefik Host rules and CSRF origins for localhost, remaps the export
+# worker debug port 9092 → 127.0.0.1:9192 to avoid collisions)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.local.yml up -d
 ```
 
-Production web UI is at `localhost:8081`, Traefik dashboard at `localhost:8091`. Production volumes bind-mount to `/mnt/ssd/cvat_latest/`.
+`deploy.sh` is the **production-host** deploy script (runs `git pull`, sets `CVAT_VERSION=dev`, rebuilds the stack) — do not run it on a local machine.
+
+**Important — the base `docker-compose.yml` is pinned for production deployment, not localhost.** Traefik routes by `Host` header (`cvat-everex.mora.center` / `192.168.1.101`) on port `8081` (→ container `8080`); plain `http://localhost:8081` will NOT reach the UI without the matching `Host` header. Traefik admin maps `8091` (→ `8090`) but its dashboard entrypoint is commented out. To reach the UI from a browser, use `docker-compose.local.yml` (above), send the right `Host` header, add a hosts-file entry, or run the UI dev server (`yarn start:cvat-ui` on `localhost:3000`). Production volumes bind-mount to `/mnt/ssd/cvat_latest/`.
 
 ### Container Naming Convention
-All Everex containers use `_everex` suffix: `cvat_server_everex`, `cvat_ui_everex`, `cvat_db_everex`, `cvat_redis_inmem_everex`, `cvat_redis_ondisk_everex`, etc. Network: `cvat_everex`. Use these names when running `docker exec` or `docker logs` commands.
+All Everex containers (and Compose service keys) use the `_everex` suffix: `cvat_server_everex`, `cvat_ui_everex`, `cvat_db_everex`, `cvat_redis_inmem_everex`, `cvat_redis_ondisk_everex`, etc. Use these exact names with `docker exec`/`docker logs` and as the service name for `docker compose run`. The Compose project name is `cvat-everex`, so the actual Docker network is `cvat-everex_cvat_everex` (verify with `docker network ls`) — use that for `docker network` / `--network` commands. The server image is `cvat/server:${CVAT_VERSION:-v2.52.0}` (there is no `:dev` tag — the dev override rebuilds this same tag).
 
 ### Frontend Development
 ```bash
@@ -63,20 +72,21 @@ yarn workspace cvat-core run type-check
 yarn run eslint .
 ```
 
-### Backend Commands (inside container or with Django settings)
+### Backend Commands (run against the running stack)
+Use the `_everex` service/container names — bare `cvat_server` does not exist in this fork.
 ```bash
-# Run Django tests
-docker compose -f docker-compose.yml -f docker-compose.dev.yml run cvat_server python manage.py test cvat/apps
+# Run Django tests (one-off container)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm cvat_server_everex python manage.py test cvat/apps
 
-# Make/check migrations
-docker run --rm cvat/server:dev python manage.py makemigrations --check
-docker run --rm cvat/server:dev python manage.py migrate
+# Make/check migrations (against the running container)
+docker exec cvat_server_everex python manage.py makemigrations --check
+docker exec cvat_server_everex python manage.py migrate
 
 # Generate API schema
-docker run --rm cvat/server:dev python manage.py spectacular > cvat/schema.yml
+docker exec cvat_server_everex python manage.py spectacular > cvat/schema.yml
 
 # Create superuser
-docker exec -it cvat_server python manage.py createsuperuser
+docker exec -it cvat_server_everex python manage.py createsuperuser
 ```
 
 ### SDK Generation
@@ -117,7 +127,7 @@ npx cypress run --browser chrome --spec 'cypress/e2e/actions_tasks/**/*.js'
 ### OPA Authorization Tests
 ```bash
 python cvat/apps/iam/rules/tests/generate_tests.py
-docker compose run --rm cvat_opa test cvat/apps/*/rules
+docker compose run --rm cvat_opa_everex test cvat/apps/*/rules
 ```
 
 ## Linting
