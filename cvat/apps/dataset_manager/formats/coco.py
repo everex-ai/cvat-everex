@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+import logging
+import os.path as osp
 import zipfile
 from pathlib import Path
 from typing import BinaryIO
@@ -14,14 +16,25 @@ from datumaro.plugins.data_formats.coco.importer import CocoImporter
 
 from cvat.apps.dataset_manager.bindings import (
     GetCVATDataExtractor,
+    JobData,
     NoMediaInAnnotationFileError,
+    ProjectData,
+    TaskData,
     detect_dataset,
     import_dm_annotations,
 )
 from cvat.apps.dataset_manager.util import make_zip_archive
+from cvat.apps.engine.models import JobType
 
+from ._coco_job_meta import (
+    annotate_images_with_job,
+    build_stem_to_job,
+    resolve_frame_jobs,
+)
 from .registry import dm_env, exporter, importer
 from .transformations import EllipsesToMasks
+
+slogger = logging.getLogger(__name__)
 
 
 @exporter(name="COCO", ext="ZIP", version="1.0")
@@ -116,6 +129,99 @@ def _postprocess_coco_keypoints_bbox(temp_dir):
                 _json.dump(doc, f)
 
 
+def _resolve_export_tasks(instance_data):
+    """Resolve the export scope to (db_tasks, job_ids).
+
+    ``job_ids`` is ``None`` for task/project exports (every annotation job in a
+    task applies) or a set restricting to a single job for job-level exports.
+    """
+    if isinstance(instance_data, JobData):
+        db_job = instance_data.db_instance
+        return [db_job.segment.task], {db_job.id}
+    if isinstance(instance_data, TaskData):
+        return [instance_data.db_instance], None
+    if isinstance(instance_data, ProjectData):
+        return list(instance_data.tasks), None
+    return [], None
+
+
+def _task_frame_jobs(db_task, job_ids):
+    """Map each absolute frame id of ``db_task`` to its annotation job dict."""
+    segments = []
+    for db_segment in db_task.segment_set.all():
+        db_job = db_segment.job_set.filter(type=JobType.ANNOTATION.value).first()
+        if db_job is None:
+            continue
+        if job_ids is not None and db_job.id not in job_ids:
+            continue
+        segments.append({
+            "job": {"id": db_job.id, "state": db_job.state, "stage": db_job.stage},
+            "start_frame": db_segment.start_frame,
+            "frames": list(db_segment.frame_set),
+        })
+    return resolve_frame_jobs(segments)
+
+
+def _task_frame_stems(db_task):
+    """Map each absolute frame id of ``db_task`` to its COCO file_name stem forms."""
+    db_data = db_task.data
+    stems = {}
+    if hasattr(db_data, "video"):
+        step = db_data.get_frame_step()
+        for abs_frame in range(db_data.start_frame, db_data.stop_frame + 1, step):
+            stems[abs_frame] = ("frame_{:06d}".format(abs_frame),)
+    else:
+        for db_image in db_data.images.all():
+            full = osp.splitext(db_image.path)[0]
+            base = osp.splitext(osp.basename(db_image.path))[0]
+            stems[db_image.frame] = (full,) if full == base else (full, base)
+    return stems
+
+
+def _inject_job_metadata(temp_dir, instance_data):
+    """Add a per-image ``job`` object (id/state/stage) to each ``images[]`` entry
+    of the exported ``person_keypoints*.json``.
+
+    A COCO Keypoints image belongs to exactly one CVAT annotation job (the job
+    that owns its frame). Task/project exports span multiple jobs, so the job is
+    resolved per frame and joined to the image by ``file_name`` stem. This is a
+    non-standard field; strict COCO consumers ignore unknown keys.
+    """
+    import glob
+    import json as _json
+
+    db_tasks, job_ids = _resolve_export_tasks(instance_data)
+    if not db_tasks:
+        return
+
+    per_task = [
+        (_task_frame_jobs(db_task, job_ids), _task_frame_stems(db_task))
+        for db_task in db_tasks
+    ]
+    stem_to_job = build_stem_to_job(per_task)
+    if not stem_to_job:
+        return
+
+    for json_path in glob.glob(str(Path(temp_dir) / "annotations" / "*.json")):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                doc = _json.load(f)
+        except (OSError, ValueError):
+            continue
+
+        matched, unmatched = annotate_images_with_job(doc, stem_to_job)
+        if matched:
+            with open(json_path, "w", encoding="utf-8") as f:
+                _json.dump(doc, f)
+        if unmatched:
+            slogger.warning(
+                "COCO Keypoints export: %d image(s) in %s could not be matched "
+                "to a job for metadata injection",
+                unmatched,
+                osp.basename(json_path),
+            )
+
+
 @exporter(name="COCO Keypoints", ext="ZIP", version="1.0")
 def _export(dst_file, temp_dir, instance_data, save_images=False):
     with GetCVATDataExtractor(instance_data, include_images=save_images) as extractor:
@@ -126,6 +232,7 @@ def _export(dst_file, temp_dir, instance_data, save_images=False):
         )
 
     _postprocess_coco_keypoints_bbox(temp_dir)
+    _inject_job_metadata(temp_dir, instance_data)
     make_zip_archive(temp_dir, dst_file)
 
 
