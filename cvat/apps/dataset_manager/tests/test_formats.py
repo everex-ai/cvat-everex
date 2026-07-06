@@ -25,7 +25,7 @@ from cvat.apps.dataset_manager.tests.utils import (
     ensure_streaming_importers,
 )
 from cvat.apps.dataset_manager.util import make_zip_archive
-from cvat.apps.engine.models import Task
+from cvat.apps.engine.models import Job, JobType, Task
 from cvat.apps.engine.tests.utils import (
     ApiTestBase,
     ForceLogin,
@@ -362,6 +362,56 @@ class TaskExportTest(_DbTestBase):
                         self.assertEqual(len(dataset), task["size"])
 
                 self._test_export(check, task, format_name, save_images=False)
+
+    def _read_coco_keypoints_json(self, file_path):
+        import glob
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            zipfile.ZipFile(file_path).extractall(tmp_dir)
+            for json_path in glob.glob(osp.join(tmp_dir, "annotations", "*.json")):
+                with open(json_path, encoding="utf-8") as f:
+                    doc = json.load(f)
+                if "images" in doc:
+                    return doc
+        self.fail("No COCO annotations json with images found in export")
+
+    def test_coco_keypoints_export_includes_per_image_job_metadata(self):
+        # 6 frames split into two annotation jobs (frames 0-2 and 3-5).
+        images = self._generate_task_images(6)
+        task = self._generate_task(images, segment_size=3)
+
+        jobs = list(
+            Job.objects.filter(
+                segment__task_id=task["id"], type=JobType.ANNOTATION.value
+            ).order_by("segment__start_frame")
+        )
+        self.assertEqual(len(jobs), 2)
+
+        Job.objects.filter(pk=jobs[0].id).update(state="in progress", stage="annotation")
+        Job.objects.filter(pk=jobs[1].id).update(state="completed", stage="acceptance")
+
+        expected = {
+            "image_0": {"id": jobs[0].id, "state": "in progress", "stage": "annotation"},
+            "image_1": {"id": jobs[0].id, "state": "in progress", "stage": "annotation"},
+            "image_2": {"id": jobs[0].id, "state": "in progress", "stage": "annotation"},
+            "image_3": {"id": jobs[1].id, "state": "completed", "stage": "acceptance"},
+            "image_4": {"id": jobs[1].id, "state": "completed", "stage": "acceptance"},
+            "image_5": {"id": jobs[1].id, "state": "completed", "stage": "acceptance"},
+        }
+
+        def check(file_path):
+            doc = self._read_coco_keypoints_json(file_path)
+            by_stem = {
+                osp.splitext(osp.basename(img["file_name"]))[0]: img
+                for img in doc["images"]
+            }
+            self.assertEqual(set(by_stem), set(expected))
+            for stem, want in expected.items():
+                self.assertIn("job", by_stem[stem], f"{stem} missing job metadata")
+                self.assertEqual(by_stem[stem]["job"], want, stem)
+
+        self._test_export(check, task, "COCO Keypoints 1.0", save_images=False)
 
     def test_can_skip_outside(self):
         images = self._generate_task_images(3)
