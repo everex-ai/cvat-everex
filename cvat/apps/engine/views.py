@@ -67,7 +67,7 @@ from cvat.apps.engine.frame_provider import (
 )
 from cvat.apps.engine.issue_snapshots import (
     schedule_issue_snapshot,
-    schedule_job_after_snapshots,
+    schedule_job_acceptance_snapshots,
 )
 from cvat.apps.engine.media_extractors import get_mime, get_video_chapters
 from cvat.apps.engine.mixins import BackupMixin, DatasetMixin, PartialUpdateModelMixin, UploadMixin
@@ -1714,6 +1714,24 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
         # Required for the extra summary information added in the queryset
         serializer.instance = self.get_queryset().get(pk=serializer.instance.pk)
 
+    @staticmethod
+    def _job_is_accepted(job) -> bool:
+        return (
+            job.stage == models.StageChoice.ACCEPTANCE
+            and job.state == models.StateChoice.COMPLETED
+        )
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        was_accepted = self._job_is_accepted(serializer.instance)
+        super().perform_update(serializer)
+        # When a job first reaches the accepted state, freeze the reviewed-and-
+        # accepted geometry as the "good" side (`after`) of every issue on the job.
+        # A reject -> re-accept transitions in again and captures another `after`.
+        # Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
+        if not was_accepted and self._job_is_accepted(serializer.instance):
+            schedule_job_acceptance_snapshots(serializer.instance.id)
+
     @transaction.atomic
     def perform_destroy(self, instance):
         if instance.type != JobType.GROUND_TRUTH:
@@ -1868,9 +1886,6 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
                     data = dm.task.put_job_data(pk, serializer.validated_data)
                 except (AttributeError, IntegrityError) as e:
                     return Response(data=str(e), status=status.HTTP_400_BAD_REQUEST)
-                # A save may carry the fix for an already-resolved issue; refresh
-                # those issues' `after` snapshots from the now-persisted geometry.
-                schedule_job_after_snapshots(pk)
                 return Response(data)
         elif request.method == 'DELETE':
             dm.task.delete_job_data(pk)
@@ -1888,9 +1903,6 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
                     data = dm.task.patch_job_data(pk, serializer.validated_data, action)
                 except (AttributeError, IntegrityError) as e:
                     return Response(data=str(e), status=status.HTTP_400_BAD_REQUEST)
-                # A save may carry the fix for an already-resolved issue; refresh
-                # those issues' `after` snapshots from the now-persisted geometry.
-                schedule_job_after_snapshots(pk)
                 return Response(data)
 
 
@@ -2184,19 +2196,12 @@ class IssueViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
     def perform_create(self, serializer, **kwargs):
         serializer.save(owner=self.request.user)
         # Freeze the "bad" annotation state at the moment the reviewer raises the
-        # issue. Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
-        # @transaction.atomic (as on TaskViewSet) makes the on_commit enqueue truly
-        # defer to commit; the request runs in autocommit otherwise.
+        # issue. The matching "good" state is captured later, when the job is
+        # accepted (see JobViewSet.perform_update). Best-effort and async — see
+        # cvat/apps/engine/issue_snapshots.py. @transaction.atomic (as on
+        # TaskViewSet) makes the on_commit enqueue truly defer to commit; the
+        # request runs in autocommit otherwise.
         schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
-
-    @transaction.atomic
-    def perform_update(self, serializer):
-        was_resolved = serializer.instance.resolved
-        super().perform_update(serializer)
-        # Capture the "fixed" state on every resolved false->true transition; a
-        # reopen -> re-resolve appends another `after`. Reopens are not captured.
-        if not was_resolved and serializer.instance.resolved:
-            schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.AFTER)
 
 @extend_schema(tags=['comments'])
 @extend_schema_view(

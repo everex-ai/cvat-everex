@@ -21,9 +21,8 @@ from cvat.apps.engine import models
 from cvat.apps.engine.issue_snapshots import (
     _serialize_shape,
     build_snapshot_data,
-    capture_issue_after_if_changed,
     capture_issue_snapshot,
-    run_job_after_snapshots,
+    run_job_acceptance_snapshots,
 )
 from cvat.apps.engine.models import IssueAnnotationSnapshot, IssueSnapshotTrigger
 
@@ -356,75 +355,51 @@ class CaptureIssueSnapshotTest(TestCase):
         self.assertTrue(by_label["right_eye"]["outside"])
 
 
-class CaptureAfterIfChangedTest(TestCase):
-    """The save-triggered `after` refresh: capture only for resolved issues, and
-    only when the frame's geometry differs from the issue's latest `after` (so a
-    fix saved after the resolve lands, but unrelated saves add nothing)."""
+class RunJobAcceptanceSnapshotsTest(TestCase):
+    """On job acceptance, freeze the accepted geometry as an `after` for every
+    issue on the job (one accepted version is the good state for all its frames)."""
 
-    def _resolved_issue(self, job, frame, *, resolved=True):
-        return models.Issue.objects.create(
-            job=job, frame=frame, position=[0.0, 0.0, 5.0, 5.0], resolved=resolved
-        )
+    def _issue(self, job, frame):
+        return models.Issue.objects.create(job=job, frame=frame, position=[0.0, 0.0, 5.0, 5.0])
 
     def _rect(self, job, label, frame, points):
         return models.LabeledShape.objects.create(
             job=job, label=label, frame=frame, type="rectangle", points=points, source="manual"
         )
 
-    def test_unresolved_issue_is_noop(self):
+    def test_captures_after_for_every_issue_on_the_job(self):
         _, job, labels = _make_job(label_names=("car",))
-        self._rect(job, labels["car"], 2, [1.0, 1.0, 2.0, 2.0])
-        issue = self._resolved_issue(job, 2, resolved=False)
-        self.assertIsNone(capture_issue_after_if_changed(issue.pk))
-        self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
+        self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
+        self._rect(job, labels["car"], 2, [3.0, 3.0, 4.0, 4.0])
+        i1 = self._issue(job, 1)
+        i2 = self._issue(job, 2)
+        run_job_acceptance_snapshots(job.id)
+        for issue in (i1, i2):
+            afters = IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after")
+            self.assertEqual(afters.count(), 1)
+            self.assertEqual(afters.first().frame, issue.frame)
 
-    def test_deleted_issue_is_noop(self):
-        self.assertIsNone(capture_issue_after_if_changed(999999))
-        self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
-
-    def test_first_after_is_created(self):
+    def test_re_acceptance_appends_another_after(self):
         _, job, labels = _make_job(label_names=("car",))
-        self._rect(job, labels["car"], 2, [1.0, 1.0, 2.0, 2.0])
-        issue = self._resolved_issue(job, 2)
-        snap = capture_issue_after_if_changed(issue.pk)
-        self.assertIsNotNone(snap)
-        self.assertEqual(snap.trigger, "after")
-        self.assertEqual(len(snap.data["objects"]), 1)
-
-    def test_unchanged_frame_is_deduplicated(self):
-        _, job, labels = _make_job(label_names=("car",))
-        shape = self._rect(job, labels["car"], 2, [1.0, 1.0, 2.0, 2.0])
-        issue = self._resolved_issue(job, 2)
-        capture_issue_after_if_changed(issue.pk)  # first after
-        # A save that did not touch this frame -> identical geometry -> no new row.
-        self.assertIsNone(capture_issue_after_if_changed(issue.pk))
-        self.assertEqual(
-            IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after").count(), 1
-        )
-        self.assertTrue(shape)  # keep reference readable
-
-    def test_changed_frame_appends_new_after(self):
-        _, job, labels = _make_job(label_names=("car",))
-        shape = self._rect(job, labels["car"], 2, [1.0, 1.0, 2.0, 2.0])
-        issue = self._resolved_issue(job, 2)
-        capture_issue_after_if_changed(issue.pk)  # first after (bad geometry)
-        # The fix is saved: the shape moves. The next save-triggered capture must
-        # append a fresh after reflecting the corrected geometry.
-        models.LabeledShape.objects.filter(pk=shape.pk).update(points=[9.0, 9.0, 12.0, 12.0])
-        snap = capture_issue_after_if_changed(issue.pk)
-        self.assertIsNotNone(snap)
+        self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
+        issue = self._issue(job, 1)
+        run_job_acceptance_snapshots(job.id)  # accept
+        run_job_acceptance_snapshots(job.id)  # reject -> re-accept
         self.assertEqual(
             IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after").count(), 2
         )
-        self.assertEqual(snap.data["objects"][0]["points"], [9.0, 9.0, 12.0, 12.0])
 
-    def test_run_job_only_refreshes_resolved_issues(self):
+    def test_job_without_issues_captures_nothing(self):
+        _, job, _ = _make_job()
+        run_job_acceptance_snapshots(job.id)
+        self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
+
+    def test_captures_moved_geometry(self):
         _, job, labels = _make_job(label_names=("car",))
-        self._rect(job, labels["car"], 2, [1.0, 1.0, 2.0, 2.0])
-        resolved = self._resolved_issue(job, 2, resolved=True)
-        open_issue = self._resolved_issue(job, 2, resolved=False)
-        run_job_after_snapshots(job.id)
-        self.assertEqual(
-            IssueAnnotationSnapshot.objects.filter(issue=resolved, trigger="after").count(), 1
-        )
-        self.assertEqual(IssueAnnotationSnapshot.objects.filter(issue=open_issue).count(), 0)
+        shape = self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
+        issue = self._issue(job, 1)
+        # The accepted state carries the corrected geometry.
+        models.LabeledShape.objects.filter(pk=shape.pk).update(points=[9.0, 9.0, 12.0, 12.0])
+        run_job_acceptance_snapshots(job.id)
+        after = IssueAnnotationSnapshot.objects.get(issue=issue, trigger="after")
+        self.assertEqual(after.data["objects"][0]["points"], [9.0, 9.0, 12.0, 12.0])

@@ -102,9 +102,9 @@ class Command(BaseCommand):
 
         befores = [s for s in snaps if s.trigger == IssueSnapshotTrigger.BEFORE]
         afters = [s for s in snaps if s.trigger == IssueSnapshotTrigger.AFTER]
-        # `after` rows accumulate on each resolve transition AND on each annotation
-        # save that changes the frame while resolved, so this counts captures, not
-        # resolves. The final `after` is the freshest saved corrected state.
+        # An `after` is captured each time the issue's job is accepted (a reject ->
+        # re-accept adds another), so this counts acceptances. The final `after` is
+        # the most recent accepted state — the good version to diff against.
         self.stdout.write(
             f"Issue {issue_id}: {len(befores)} before, {len(afters)} after (after_count={len(afters)})"
         )

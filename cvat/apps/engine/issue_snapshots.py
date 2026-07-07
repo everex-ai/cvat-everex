@@ -4,22 +4,25 @@
 
 """Capture a densified per-frame annotation snapshot for a review Issue.
 
-When a reviewer opens an issue (``before``) and each time that issue is resolved
-(``after``), we freeze the geometry on the issue's frame into an
-``IssueAnnotationSnapshot`` row. Accumulated over many issues this yields the raw
-material for a ``{bad -> feedback -> good}`` keypoint-correction dataset (export,
-before/after matching and diffing are a later phase — see
-``docs/plans/2026-07-07-001-...``).
+Two capture points, one per side of a ``{bad -> feedback -> good}`` correction:
 
-Capturing ``after`` at resolve time alone is not enough: in CVAT resolving an
-issue (``PATCH /issues/{id}`` ``resolved=true``) and *saving* the corrected
-annotations (``PUT``/``PATCH /jobs/{id}/annotations``) are independent requests
-with no ordering guarantee. If the annotator resolves before saving the fix, the
-resolve-time ``after`` reads the pre-fix geometry. So we *also* capture ``after``
-on annotation save, for every resolved issue on the job, de-duplicated against the
-issue's latest ``after`` so an unchanged frame adds no row. Whichever event lands
-last (resolve or save) produces the freshest ``after``; a later phase takes the
-newest ``after`` per issue as the corrected state.
+* ``before`` — when a reviewer *raises* an issue, we freeze the geometry on the
+  issue's frame: the problematic state being flagged.
+* ``after`` — when the issue's **job is accepted** (``stage=acceptance`` &
+  ``state=completed``), we freeze every issue-frame of that job again: the final
+  reviewed-and-accepted version.
+
+Tying ``after`` to job acceptance (rather than to each issue resolve or each
+annotation save) sidesteps the fragile ordering between resolving an issue and
+saving the corrected annotations — those are independent requests with no ordering
+guarantee, so a resolve-before-save would otherwise capture pre-fix geometry.
+Acceptance is a single, unambiguous "this is the ground truth" signal; the
+accepted job state is the good version for every frame it flagged. A job rejected
+and re-accepted simply captures again, and a later phase takes the newest
+``after`` per issue. The feedback text lives in ``Comment`` rows and is joined at
+export time. Accumulated over many issues this yields the raw material for the
+keypoint-correction dataset (export / before-after matching are a later phase —
+see ``docs/plans/2026-07-07-001-...``).
 
 Design notes
 ------------
@@ -40,7 +43,6 @@ Design notes
   raw RLE is large and out of scope for keypoint correction.
 """
 
-import json
 import logging
 
 import django_rq
@@ -165,7 +167,7 @@ def capture_issue_snapshot(issue_id: int, trigger: str) -> IssueAnnotationSnapsh
     Returns the created row, or ``None`` when there is nothing to capture (the
     issue was deleted before the worker ran, or its frame is out of range). Any
     other failure propagates to the caller, which is responsible for isolating it
-    (a capture failure must never break issue create/resolve — see plan R8).
+    (a capture failure must never break the triggering request — see plan R8).
     """
     if trigger not in IssueSnapshotTrigger.values:
         raise ValueError(f"unknown snapshot trigger {trigger!r}")
@@ -217,20 +219,21 @@ def run_issue_snapshot_capture(issue_id: int, trigger: str) -> None:
 
 def enqueue_issue_snapshot(issue_id: int, trigger: str) -> None:
     """Enqueue a capture job on the notifications queue (served by the utils
-    worker). Enqueue failures are swallowed and logged — see R8."""
+    worker). Enqueue failures are swallowed and logged — see R8. Used for the
+    ``before`` capture on issue creation."""
     try:
         queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
         queue.enqueue(run_issue_snapshot_capture, issue_id, trigger)
-    except Exception:  # noqa: BLE001 - enqueue must not break issue create/resolve
+    except Exception:  # noqa: BLE001 - enqueue must not break issue creation
         logger.exception("Failed to enqueue %s snapshot for issue %s", trigger, issue_id)
 
 
 def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:
     """Schedule the capture to be enqueued once the surrounding request
-    transaction commits, so the worker reads the persisted post-transition state.
+    transaction commits, so the worker reads the persisted committed state.
 
     ``robust=True`` keeps a failing callback from breaking the commit; the enqueue
-    is additionally guarded, so a Redis hiccup never fails issue create/resolve.
+    is additionally guarded, so a Redis hiccup never fails issue creation.
     """
     transaction.on_commit(
         lambda: enqueue_issue_snapshot(issue_id, trigger),
@@ -238,97 +241,40 @@ def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:
     )
 
 
-def _objects_signature(data: dict | None) -> str:
-    """Stable, order-preserving JSON of a snapshot's ``objects`` for change
-    detection. Only the geometry matters, so frame metadata (name/size) is
-    ignored; ``sort_keys`` makes it insensitive to dict key ordering. Densifying
-    the same DB state twice yields equal floats -> equal signatures, so an
-    unchanged frame never looks changed."""
-    return json.dumps((data or {}).get("objects", []), sort_keys=True, ensure_ascii=False)
-
-
-def capture_issue_after_if_changed(issue_id: int) -> IssueAnnotationSnapshot | None:
-    """Capture an ``after`` snapshot for a *resolved* issue, but only if its frame
-    now differs from the issue's latest ``after``. Used by the annotation-save
-    path so a fix saved after the resolve still lands a fresh ``after``.
-
-    Returns the new row, or ``None`` when there is nothing to add: the issue is
-    gone, not resolved, its frame is out of range, or the geometry is unchanged
-    since the last ``after`` (de-dup — avoids a row per unrelated save)."""
-    issue = Issue.objects.select_related("job__segment__task__data").filter(pk=issue_id).first()
-    if issue is None or not issue.resolved:
-        return None
-
+def run_job_acceptance_snapshots(job_id: int) -> None:
+    """RQ worker entry (notifications queue): a job has been accepted, so freeze the
+    accepted geometry as the ``after`` for every issue on that job — one accepted
+    version is the ground-truth good state for all frames it flagged. Each issue is
+    isolated so one failure cannot drop the others, and the whole thing is
+    best-effort — it must never surface to the reviewer who accepted the job (R8)."""
     try:
-        data = build_snapshot_data(issue.job, issue.frame)
-    except ValueError as exc:
-        logger.warning("Skipping post-save after snapshot for issue %s: %s", issue_id, exc)
-        return None
-
-    latest_after = (
-        issue.annotation_snapshots.filter(trigger=IssueSnapshotTrigger.AFTER)
-        .order_by("-id")
-        .first()
-    )
-    if latest_after is not None and _objects_signature(latest_after.data) == _objects_signature(
-        data
-    ):
-        # Frame unchanged since the last `after`; this save touched other frames.
-        return None
-
-    snapshot = IssueAnnotationSnapshot.objects.create(
-        issue=issue,
-        job=issue.job,
-        trigger=IssueSnapshotTrigger.AFTER,
-        frame=issue.frame,
-        data=data,
-    )
-    logger.info(
-        "Captured post-save after snapshot %s for resolved issue %s (job %s, frame %s, %d objects)",
-        snapshot.id,
-        issue_id,
-        issue.job_id,
-        issue.frame,
-        len(data["objects"]),
-    )
-    return snapshot
-
-
-def run_job_after_snapshots(job_id: int) -> None:
-    """RQ worker entry (notifications queue): after a job's annotations are saved,
-    refresh the ``after`` snapshot of every resolved issue on that job. Each issue
-    is isolated so one capture failure cannot drop the others, and the whole thing
-    is best-effort — it must never surface to the user who saved annotations."""
-    try:
-        issue_ids = list(
-            Issue.objects.filter(job_id=job_id, resolved=True).values_list("id", flat=True)
-        )
+        issue_ids = list(Issue.objects.filter(job_id=job_id).values_list("id", flat=True))
     except Exception:  # noqa: BLE001 - capture is best-effort; never escalate
-        logger.exception("Failed to list resolved issues for job %s", job_id)
+        logger.exception("Failed to list issues for accepted job %s", job_id)
         return
 
     for issue_id in issue_ids:
         try:
-            capture_issue_after_if_changed(issue_id)
+            capture_issue_snapshot(issue_id, IssueSnapshotTrigger.AFTER)
         except Exception:  # noqa: BLE001 - isolate per issue
-            logger.exception("Failed post-save after snapshot for issue %s", issue_id)
+            logger.exception("Failed acceptance after snapshot for issue %s", issue_id)
 
 
-def enqueue_job_after_snapshots(job_id: int) -> None:
-    """Enqueue the post-save ``after`` refresh on the notifications queue. Enqueue
-    failures are swallowed and logged — saving annotations must never fail because
+def enqueue_job_acceptance_snapshots(job_id: int) -> None:
+    """Enqueue the acceptance ``after`` capture on the notifications queue. Enqueue
+    failures are swallowed and logged — accepting a job must never fail because
     snapshot observability is down (see R8)."""
     try:
         queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
-        queue.enqueue(run_job_after_snapshots, job_id)
-    except Exception:  # noqa: BLE001 - enqueue must not break annotation save
-        logger.exception("Failed to enqueue post-save after snapshots for job %s", job_id)
+        queue.enqueue(run_job_acceptance_snapshots, job_id)
+    except Exception:  # noqa: BLE001 - enqueue must not break job acceptance
+        logger.exception("Failed to enqueue acceptance after snapshots for job %s", job_id)
 
 
-def schedule_job_after_snapshots(job_id: int) -> None:
-    """Schedule the post-save ``after`` refresh once the annotation-save
-    transaction commits, so the worker reads the persisted corrected geometry."""
+def schedule_job_acceptance_snapshots(job_id: int) -> None:
+    """Schedule the acceptance ``after`` capture once the job-update transaction
+    commits, so the worker reads the persisted accepted state."""
     transaction.on_commit(
-        lambda: enqueue_job_after_snapshots(job_id),
+        lambda: enqueue_job_acceptance_snapshots(job_id),
         robust=True,
     )
