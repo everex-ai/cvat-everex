@@ -1,7 +1,7 @@
 ---
 title: "feat: Capture before/after annotation snapshots around review issues (Phase 1)"
 type: feat
-status: active
+status: completed
 date: 2026-07-07
 origin: docs/brainstorms/2026-07-07-review-issue-correction-snapshots-requirements.md
 ---
