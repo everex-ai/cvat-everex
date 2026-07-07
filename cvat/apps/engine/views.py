@@ -65,6 +65,7 @@ from cvat.apps.engine.frame_provider import (
     JobFrameProvider,
     TaskFrameProvider,
 )
+from cvat.apps.engine.issue_snapshots import schedule_issue_snapshot
 from cvat.apps.engine.media_extractors import get_mime, get_video_chapters
 from cvat.apps.engine.mixins import BackupMixin, DatasetMixin, PartialUpdateModelMixin, UploadMixin
 from cvat.apps.engine.model_utils import bulk_create
@@ -78,6 +79,7 @@ from cvat.apps.engine.models import (
     Data,
     FrameQuality,
     Issue,
+    IssueSnapshotTrigger,
     Job,
     JobType,
     Label,
@@ -2171,6 +2173,17 @@ class IssueViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
 
     def perform_create(self, serializer, **kwargs):
         serializer.save(owner=self.request.user)
+        # Freeze the "bad" annotation state at the moment the reviewer raises the
+        # issue. Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
+        schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
+
+    def perform_update(self, serializer):
+        was_resolved = serializer.instance.resolved
+        super().perform_update(serializer)
+        # Capture the "fixed" state on every resolved false->true transition; a
+        # reopen -> re-resolve appends another `after`. Reopens are not captured.
+        if not was_resolved and serializer.instance.resolved:
+            schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.AFTER)
 
 @extend_schema(tags=['comments'])
 @extend_schema_view(

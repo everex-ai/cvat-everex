@@ -1,0 +1,144 @@
+# Copyright (C) CVAT.ai Corporation
+#
+# SPDX-License-Identifier: MIT
+
+"""Tests for the enqueue/worker glue and IssueViewSet capture hooks (plan U3).
+
+Two layers:
+  * the worker entry + enqueue helpers, verified with mocks — correct queue
+    targeting, argument passing, and failure isolation (plan R8); and
+  * the IssueViewSet ``perform_create`` / ``perform_update`` transition logic,
+    driven through the real viewset + serializer with the enqueue mocked, so we
+    assert exactly when a snapshot is scheduled: on create (``before``) and on
+    each ``resolved`` false->true transition (``after``), and never otherwise.
+"""
+
+from types import SimpleNamespace
+from unittest import mock
+
+from django.test import TestCase
+
+from cvat.apps.engine import models
+from cvat.apps.engine.issue_snapshots import (
+    enqueue_issue_snapshot,
+    run_issue_snapshot_capture,
+)
+from cvat.apps.engine.models import IssueSnapshotTrigger
+from cvat.apps.engine.serializers import IssueWriteSerializer
+from cvat.apps.engine.views import IssueViewSet
+
+_ENQUEUE = "cvat.apps.engine.issue_snapshots.enqueue_issue_snapshot"
+
+
+class IssueSnapshotWorkerTest(TestCase):
+    def test_run_capture_invokes_capture(self):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.capture_issue_snapshot"
+        ) as capture:
+            run_issue_snapshot_capture(42, IssueSnapshotTrigger.BEFORE)
+        capture.assert_called_once_with(42, IssueSnapshotTrigger.BEFORE)
+
+    def test_run_capture_isolates_exceptions(self):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.capture_issue_snapshot",
+            side_effect=RuntimeError("boom"),
+        ):
+            # Must not raise — a capture failure cannot escalate to the worker.
+            self.assertIsNone(run_issue_snapshot_capture(42, IssueSnapshotTrigger.AFTER))
+
+    def test_enqueue_targets_notifications_queue(self):
+        with mock.patch("cvat.apps.engine.issue_snapshots.django_rq.get_queue") as get_queue:
+            queue = get_queue.return_value
+            enqueue_issue_snapshot(7, IssueSnapshotTrigger.BEFORE)
+        get_queue.assert_called_once_with("notifications")
+        queue.enqueue.assert_called_once_with(
+            run_issue_snapshot_capture, 7, IssueSnapshotTrigger.BEFORE
+        )
+
+    def test_enqueue_isolates_failure(self):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.django_rq.get_queue",
+            side_effect=ConnectionError("no redis"),
+        ):
+            # Enqueue failure must not break issue create/resolve.
+            self.assertIsNone(enqueue_issue_snapshot(7, IssueSnapshotTrigger.AFTER))
+
+
+class IssueViewSetSnapshotHookTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = models.User.objects.create_user(username="rev", password="x")
+        cls.task = models.Task.objects.create(name="hook-test", mode="annotation")
+        cls.segment = models.Segment.objects.create(
+            task=cls.task, start_frame=0, stop_frame=5
+        )
+        cls.job = models.Job.objects.create(
+            segment=cls.segment, type=models.JobType.ANNOTATION
+        )
+
+    def _view(self):
+        view = IssueViewSet()
+        view.request = SimpleNamespace(user=self.user)
+        return view
+
+    def _issue(self, resolved=False):
+        return models.Issue.objects.create(
+            job=self.job, frame=0, position=[0.0, 0.0, 1.0, 1.0], resolved=resolved
+        )
+
+    def _perform_update(self, issue, resolved):
+        """Run perform_update with the enqueue mocked; return the mock."""
+        serializer = IssueWriteSerializer(
+            instance=issue, data={"resolved": resolved}, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        with mock.patch(_ENQUEUE) as enq:
+            with self.captureOnCommitCallbacks(execute=True):
+                self._view().perform_update(serializer)
+        return enq
+
+    def test_create_schedules_before(self):
+        serializer = IssueWriteSerializer(
+            data={
+                "job": self.job.id,
+                "frame": 0,
+                "position": [0.0, 0.0, 1.0, 1.0],
+                "message": "bad keypoints",
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+        with mock.patch(_ENQUEUE) as enq:
+            with self.captureOnCommitCallbacks(execute=True):
+                self._view().perform_create(serializer)
+        enq.assert_called_once_with(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
+
+    def test_resolve_schedules_after(self):
+        issue = self._issue(resolved=False)
+        enq = self._perform_update(issue, resolved=True)
+        enq.assert_called_once_with(issue.id, IssueSnapshotTrigger.AFTER)
+
+    def test_non_transition_update_does_not_schedule(self):
+        issue = self._issue(resolved=False)
+        enq = self._perform_update(issue, resolved=False)  # stays open
+        enq.assert_not_called()
+
+    def test_already_resolved_update_does_not_schedule(self):
+        issue = self._issue(resolved=True)
+        enq = self._perform_update(issue, resolved=True)  # true -> true
+        enq.assert_not_called()
+
+    def test_reopen_then_reresolve_schedules_after_each_time(self):
+        # AE3: resolve -> reopen -> re-resolve captures an `after` on each resolve.
+        issue = self._issue(resolved=False)
+
+        self._perform_update(issue, resolved=True).assert_called_once_with(
+            issue.id, IssueSnapshotTrigger.AFTER
+        )
+        issue.refresh_from_db()
+
+        self._perform_update(issue, resolved=False).assert_not_called()  # reopen
+        issue.refresh_from_db()
+
+        self._perform_update(issue, resolved=True).assert_called_once_with(
+            issue.id, IssueSnapshotTrigger.AFTER
+        )

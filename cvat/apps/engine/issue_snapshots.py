@@ -32,6 +32,10 @@ Design notes
 
 import logging
 
+import django_rq
+from django.conf import settings
+from django.db import transaction
+
 from cvat.apps.engine.models import (
     Issue,
     IssueAnnotationSnapshot,
@@ -170,3 +174,44 @@ def capture_issue_snapshot(issue_id: int, trigger: str) -> IssueAnnotationSnapsh
         trigger, snapshot.id, issue_id, issue.job_id, issue.frame, len(data["objects"]),
     )
     return snapshot
+
+
+def run_issue_snapshot_capture(issue_id: int, trigger: str) -> None:
+    """RQ worker entry point (notifications queue).
+
+    Isolates every capture failure: a snapshot is best-effort observability and
+    must never surface as an error to the reviewer who created/resolved the issue
+    (plan R8). The enqueue itself already happened after commit, so by the time we
+    run the issue may be gone — ``capture_issue_snapshot`` handles that as a no-op.
+    """
+    try:
+        capture_issue_snapshot(issue_id, trigger)
+    except Exception:  # noqa: BLE001 - deliberate catch-all; capture must not escalate
+        logger.exception(
+            "Failed to capture %s snapshot for issue %s", trigger, issue_id
+        )
+
+
+def enqueue_issue_snapshot(issue_id: int, trigger: str) -> None:
+    """Enqueue a capture job on the notifications queue (served by the utils
+    worker). Enqueue failures are swallowed and logged — see R8."""
+    try:
+        queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
+        queue.enqueue(run_issue_snapshot_capture, issue_id, trigger)
+    except Exception:  # noqa: BLE001 - enqueue must not break issue create/resolve
+        logger.exception(
+            "Failed to enqueue %s snapshot for issue %s", trigger, issue_id
+        )
+
+
+def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:
+    """Schedule the capture to be enqueued once the surrounding request
+    transaction commits, so the worker reads the persisted post-transition state.
+
+    ``robust=True`` keeps a failing callback from breaking the commit; the enqueue
+    is additionally guarded, so a Redis hiccup never fails issue create/resolve.
+    """
+    transaction.on_commit(
+        lambda: enqueue_issue_snapshot(issue_id, trigger),
+        robust=True,
+    )
