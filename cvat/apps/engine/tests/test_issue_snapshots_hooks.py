@@ -20,8 +20,12 @@ from django.test import TestCase
 
 from cvat.apps.engine import models
 from cvat.apps.engine.issue_snapshots import (
+    capture_issue_snapshot,
     enqueue_issue_snapshot,
+    enqueue_job_after_snapshots,
     run_issue_snapshot_capture,
+    run_job_after_snapshots,
+    schedule_job_after_snapshots,
 )
 from cvat.apps.engine.models import IssueAnnotationSnapshot, IssueSnapshotTrigger
 from cvat.apps.engine.serializers import IssueWriteSerializer
@@ -61,6 +65,21 @@ class IssueSnapshotWorkerTest(TestCase):
         ):
             # Enqueue failure must not break issue create/resolve.
             self.assertIsNone(enqueue_issue_snapshot(7, IssueSnapshotTrigger.AFTER))
+
+    def test_enqueue_job_after_targets_notifications_queue(self):
+        with mock.patch("cvat.apps.engine.issue_snapshots.django_rq.get_queue") as get_queue:
+            queue = get_queue.return_value
+            enqueue_job_after_snapshots(11)
+        get_queue.assert_called_once_with("notifications")
+        queue.enqueue.assert_called_once_with(run_job_after_snapshots, 11)
+
+    def test_enqueue_job_after_isolates_failure(self):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.django_rq.get_queue",
+            side_effect=ConnectionError("no redis"),
+        ):
+            # A save must not fail because snapshot enqueue is down.
+            self.assertIsNone(enqueue_job_after_snapshots(11))
 
 
 class IssueViewSetSnapshotHookTest(TestCase):
@@ -204,3 +223,49 @@ class IssueSnapshotEndToEndTest(TestCase):
             ).count(),
             1,
         )
+
+
+class SaveAfterSnapshotEndToEndTest(TestCase):
+    """The resolve-before-save fix: an issue resolved before the corrected
+    geometry is saved gets a stale resolve-time `after`; the subsequent annotation
+    save must append a fresh `after` reflecting the persisted correction. Drives
+    schedule_job_after_snapshots -> on_commit -> enqueue -> run_job_after_snapshots
+    with only the queue transport stubbed."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = models.User.objects.create_user(username="save-e2e", password="x")
+
+    def _run_inline(self, fn):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.django_rq.get_queue",
+            return_value=_SyncQueue(),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                fn()
+
+    def test_save_after_resolve_refreshes_after(self):
+        _, job, labels = _make_job(label_names=("car",))
+        shape = models.LabeledShape.objects.create(
+            job=job,
+            label=labels["car"],
+            frame=1,
+            type="rectangle",
+            points=[1.0, 1.0, 2.0, 2.0],
+            source="manual",
+        )
+        issue = models.Issue.objects.create(
+            job=job, frame=1, position=[0.0, 0.0, 5.0, 5.0], resolved=True
+        )
+        # Resolve-before-save: the resolve-time `after` froze the pre-fix geometry.
+        capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.AFTER)
+        stale = IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after").latest("id")
+        self.assertEqual(stale.data["objects"][0]["points"], [1.0, 1.0, 2.0, 2.0])
+
+        # The fix is saved (the shape moves); the annotation-save hook fires.
+        models.LabeledShape.objects.filter(pk=shape.pk).update(points=[8.0, 8.0, 10.0, 10.0])
+        self._run_inline(lambda: schedule_job_after_snapshots(job.id))
+
+        afters = IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after").order_by("id")
+        self.assertEqual(afters.count(), 2)
+        self.assertEqual(afters.last().data["objects"][0]["points"], [8.0, 8.0, 10.0, 10.0])

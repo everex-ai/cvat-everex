@@ -90,12 +90,45 @@ class IssueSnapshotsReportTest(TestCase):
         self._snap(issue, IssueSnapshotTrigger.AFTER, [skeleton_after])  # rect dropped
 
         out = _run(issue=issue.id)
-        self.assertIn(f"Issue {issue.id}: 1 before, 1 after (resolve_count=1)", out)
+        self.assertIn(f"Issue {issue.id}: 1 before, 1 after (after_count=1)", out)
         self.assertIn("shape#1", out)  # skeleton matched
         self.assertIn("kpts=1/2", out)  # before: 1 visible keypoint
         self.assertIn("kpts=2/2", out)  # after: 2 visible keypoints
         self.assertIn("shape#2", out)  # rectangle only in before
         self.assertIn("<UNMATCHED>", out)
+
+    def test_issue_dump_delta_reports_moved_keypoints(self):
+        issue = self._issue()
+        before = {
+            "id": 1,
+            "type": "skeleton",
+            "label": "person",
+            "elements": [
+                {"id": 11, "type": "points", "label": "nose", "points": [10.0, 10.0]},
+                {"id": 12, "type": "points", "label": "chin", "points": [20.0, 20.0]},
+            ],
+        }
+        after = {
+            "id": 1,
+            "type": "skeleton",
+            "label": "person",
+            "elements": [
+                {"id": 11, "type": "points", "label": "nose", "points": [10.0, 10.0]},  # unchanged
+                {"id": 12, "type": "points", "label": "chin", "points": [55.0, 60.0]},  # moved
+            ],
+        }
+        self._snap(issue, IssueSnapshotTrigger.BEFORE, [before])
+        self._snap(issue, IssueSnapshotTrigger.AFTER, [after])
+        out = _run(issue=issue.id)
+        self.assertIn("moved 1/2", out)  # one keypoint displaced
+
+    def test_issue_dump_delta_reports_same_for_empty_correction(self):
+        issue = self._issue()
+        obj = {"id": 1, "type": "rectangle", "label": "car", "points": [0.0, 0.0, 10.0, 10.0]}
+        self._snap(issue, IssueSnapshotTrigger.BEFORE, [dict(obj)])
+        self._snap(issue, IssueSnapshotTrigger.AFTER, [dict(obj)])  # resolved, nothing moved
+        out = _run(issue=issue.id)
+        self.assertIn("same", out)
 
     def test_issue_dump_missing_after_is_incomplete(self):
         issue = self._issue()

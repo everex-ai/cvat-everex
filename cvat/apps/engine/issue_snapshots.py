@@ -11,6 +11,16 @@ material for a ``{bad -> feedback -> good}`` keypoint-correction dataset (export
 before/after matching and diffing are a later phase — see
 ``docs/plans/2026-07-07-001-...``).
 
+Capturing ``after`` at resolve time alone is not enough: in CVAT resolving an
+issue (``PATCH /issues/{id}`` ``resolved=true``) and *saving* the corrected
+annotations (``PUT``/``PATCH /jobs/{id}/annotations``) are independent requests
+with no ordering guarantee. If the annotator resolves before saving the fix, the
+resolve-time ``after`` reads the pre-fix geometry. So we *also* capture ``after``
+on annotation save, for every resolved issue on the job, de-duplicated against the
+issue's latest ``after`` so an unchanged frame adds no row. Whichever event lands
+last (resolve or save) produces the freshest ``after``; a later phase takes the
+newest ``after`` per issue as the corrected state.
+
 Design notes
 ------------
 * **Densification.** Tracks store only keyframes; non-keyframe frames are
@@ -30,6 +40,7 @@ Design notes
   raw RLE is large and out of scope for keypoint correction.
 """
 
+import json
 import logging
 
 import django_rq
@@ -223,5 +234,101 @@ def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:
     """
     transaction.on_commit(
         lambda: enqueue_issue_snapshot(issue_id, trigger),
+        robust=True,
+    )
+
+
+def _objects_signature(data: dict | None) -> str:
+    """Stable, order-preserving JSON of a snapshot's ``objects`` for change
+    detection. Only the geometry matters, so frame metadata (name/size) is
+    ignored; ``sort_keys`` makes it insensitive to dict key ordering. Densifying
+    the same DB state twice yields equal floats -> equal signatures, so an
+    unchanged frame never looks changed."""
+    return json.dumps((data or {}).get("objects", []), sort_keys=True, ensure_ascii=False)
+
+
+def capture_issue_after_if_changed(issue_id: int) -> IssueAnnotationSnapshot | None:
+    """Capture an ``after`` snapshot for a *resolved* issue, but only if its frame
+    now differs from the issue's latest ``after``. Used by the annotation-save
+    path so a fix saved after the resolve still lands a fresh ``after``.
+
+    Returns the new row, or ``None`` when there is nothing to add: the issue is
+    gone, not resolved, its frame is out of range, or the geometry is unchanged
+    since the last ``after`` (de-dup — avoids a row per unrelated save)."""
+    issue = Issue.objects.select_related("job__segment__task__data").filter(pk=issue_id).first()
+    if issue is None or not issue.resolved:
+        return None
+
+    try:
+        data = build_snapshot_data(issue.job, issue.frame)
+    except ValueError as exc:
+        logger.warning("Skipping post-save after snapshot for issue %s: %s", issue_id, exc)
+        return None
+
+    latest_after = (
+        issue.annotation_snapshots.filter(trigger=IssueSnapshotTrigger.AFTER)
+        .order_by("-id")
+        .first()
+    )
+    if latest_after is not None and _objects_signature(latest_after.data) == _objects_signature(
+        data
+    ):
+        # Frame unchanged since the last `after`; this save touched other frames.
+        return None
+
+    snapshot = IssueAnnotationSnapshot.objects.create(
+        issue=issue,
+        job=issue.job,
+        trigger=IssueSnapshotTrigger.AFTER,
+        frame=issue.frame,
+        data=data,
+    )
+    logger.info(
+        "Captured post-save after snapshot %s for resolved issue %s (job %s, frame %s, %d objects)",
+        snapshot.id,
+        issue_id,
+        issue.job_id,
+        issue.frame,
+        len(data["objects"]),
+    )
+    return snapshot
+
+
+def run_job_after_snapshots(job_id: int) -> None:
+    """RQ worker entry (notifications queue): after a job's annotations are saved,
+    refresh the ``after`` snapshot of every resolved issue on that job. Each issue
+    is isolated so one capture failure cannot drop the others, and the whole thing
+    is best-effort — it must never surface to the user who saved annotations."""
+    try:
+        issue_ids = list(
+            Issue.objects.filter(job_id=job_id, resolved=True).values_list("id", flat=True)
+        )
+    except Exception:  # noqa: BLE001 - capture is best-effort; never escalate
+        logger.exception("Failed to list resolved issues for job %s", job_id)
+        return
+
+    for issue_id in issue_ids:
+        try:
+            capture_issue_after_if_changed(issue_id)
+        except Exception:  # noqa: BLE001 - isolate per issue
+            logger.exception("Failed post-save after snapshot for issue %s", issue_id)
+
+
+def enqueue_job_after_snapshots(job_id: int) -> None:
+    """Enqueue the post-save ``after`` refresh on the notifications queue. Enqueue
+    failures are swallowed and logged — saving annotations must never fail because
+    snapshot observability is down (see R8)."""
+    try:
+        queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
+        queue.enqueue(run_job_after_snapshots, job_id)
+    except Exception:  # noqa: BLE001 - enqueue must not break annotation save
+        logger.exception("Failed to enqueue post-save after snapshots for job %s", job_id)
+
+
+def schedule_job_after_snapshots(job_id: int) -> None:
+    """Schedule the post-save ``after`` refresh once the annotation-save
+    transaction commits, so the worker reads the persisted corrected geometry."""
+    transaction.on_commit(
+        lambda: enqueue_job_after_snapshots(job_id),
         robust=True,
     )

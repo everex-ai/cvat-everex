@@ -65,7 +65,10 @@ from cvat.apps.engine.frame_provider import (
     JobFrameProvider,
     TaskFrameProvider,
 )
-from cvat.apps.engine.issue_snapshots import schedule_issue_snapshot
+from cvat.apps.engine.issue_snapshots import (
+    schedule_issue_snapshot,
+    schedule_job_after_snapshots,
+)
 from cvat.apps.engine.media_extractors import get_mime, get_video_chapters
 from cvat.apps.engine.mixins import BackupMixin, DatasetMixin, PartialUpdateModelMixin, UploadMixin
 from cvat.apps.engine.model_utils import bulk_create
@@ -1865,6 +1868,9 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
                     data = dm.task.put_job_data(pk, serializer.validated_data)
                 except (AttributeError, IntegrityError) as e:
                     return Response(data=str(e), status=status.HTTP_400_BAD_REQUEST)
+                # A save may carry the fix for an already-resolved issue; refresh
+                # those issues' `after` snapshots from the now-persisted geometry.
+                schedule_job_after_snapshots(pk)
                 return Response(data)
         elif request.method == 'DELETE':
             dm.task.delete_job_data(pk)
@@ -1882,6 +1888,9 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
                     data = dm.task.patch_job_data(pk, serializer.validated_data, action)
                 except (AttributeError, IntegrityError) as e:
                     return Response(data=str(e), status=status.HTTP_400_BAD_REQUEST)
+                # A save may carry the fix for an already-resolved issue; refresh
+                # those issues' `after` snapshots from the now-persisted geometry.
+                schedule_job_after_snapshots(pk)
                 return Response(data)
 
 

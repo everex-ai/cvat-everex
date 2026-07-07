@@ -102,9 +102,11 @@ class Command(BaseCommand):
 
         befores = [s for s in snaps if s.trigger == IssueSnapshotTrigger.BEFORE]
         afters = [s for s in snaps if s.trigger == IssueSnapshotTrigger.AFTER]
+        # `after` rows accumulate on each resolve transition AND on each annotation
+        # save that changes the frame while resolved, so this counts captures, not
+        # resolves. The final `after` is the freshest saved corrected state.
         self.stdout.write(
-            f"Issue {issue_id}: {len(befores)} before, {len(afters)} after "
-            f"(resolve_count={len(afters)})"
+            f"Issue {issue_id}: {len(befores)} before, {len(afters)} after (after_count={len(afters)})"
         )
 
         before = befores[0] if befores else None  # initial bad
@@ -117,18 +119,56 @@ class Command(BaseCommand):
         after_objs = {_object_key(o): o for o in after.data.get("objects", [])}
         keys = sorted(set(before_objs) | set(after_objs), key=lambda k: (k[0], str(k[1])))
 
-        self.stdout.write(f"  {'object':<16}{'before':<28}{'after':<28}")
+        self.stdout.write(f"  {'object':<16}{'before':<28}{'after':<28}{'delta'}")
         for key in keys:
             before_obj = before_objs.get(key)
             after_obj = after_objs.get(key)
-            tag = "" if (before_obj and after_obj) else "  <UNMATCHED>"
+            if before_obj and after_obj:
+                delta = self._delta(before_obj, after_obj)
+            else:
+                delta = "<UNMATCHED>"
             self.stdout.write(
-                f"  {self._fmt_key(key):<16}{self._fmt(before_obj):<28}{self._fmt(after_obj):<28}{tag}"
+                f"  {self._fmt_key(key):<16}{self._fmt(before_obj):<28}"
+                f"{self._fmt(after_obj):<28}{delta}"
             )
 
     @staticmethod
     def _fmt_key(key) -> str:
         return f"{key[0]}#{key[1]}"
+
+    @staticmethod
+    def _delta(before_obj, after_obj) -> str:
+        """Summarise how much geometry moved between before and after: the point of
+        the whole dataset. ``moved M/N max=D`` counts vertices/keypoints displaced
+        by >0.5px and the largest displacement; ``same`` means an empty correction
+        (issue resolved without touching the object — Phase-2 export should drop it)."""
+        b_els = {e["label"]: e for e in before_obj.get("elements", [])}
+        a_els = {e["label"]: e for e in after_obj.get("elements", [])}
+        if b_els and a_els:  # skeleton: match keypoints by sublabel name
+            pairs = [
+                (b_els[label].get("points", []), a_els[label].get("points", []))
+                for label in b_els.keys() & a_els.keys()
+            ]
+        else:  # plain shape: pair vertices positionally when counts match
+            bp, ap = before_obj.get("points", []), after_obj.get("points", [])
+            if len(bp) != len(ap):
+                return "changed"
+            pairs = [(bp[i : i + 2], ap[i : i + 2]) for i in range(0, len(bp) - 1, 2)]
+
+        moved = 0
+        max_d = 0.0
+        counted = 0
+        for bp, ap in pairs:
+            if len(bp) < 2 or len(ap) < 2:
+                continue
+            counted += 1
+            d = ((ap[0] - bp[0]) ** 2 + (ap[1] - bp[1]) ** 2) ** 0.5
+            if d > 0.5:
+                moved += 1
+            max_d = max(max_d, d)
+        if counted == 0:
+            return "-"
+        return f"moved {moved}/{counted} max={max_d:.1f}" if moved else "same"
 
     @staticmethod
     def _fmt(obj) -> str:
