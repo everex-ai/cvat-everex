@@ -1290,6 +1290,39 @@ class Comment(TimestampedModel):
     def get_job_id(self):
         return self.issue.get_job_id()
 
+
+class IssueSnapshotTrigger(TextChoices):
+    BEFORE = "before", "before"
+    AFTER = "after", "after"
+
+
+class IssueAnnotationSnapshot(TimestampedModel):
+    """Frozen densified annotation geometry of an Issue's frame.
+
+    Captured server-side when the issue is created (``before``) and at each
+    resolve transition (``after``). Accumulates the raw material for a
+    COCO-Keypoints-derived ``{bad -> feedback -> good}`` correction dataset;
+    export / matching / diff belong to a later phase and are not stored here.
+
+    Multiple rows per issue are expected and intended: one ``before`` plus one
+    ``after`` per resolve transition (a reopen -> re-resolve appends another
+    ``after``). No uniqueness constraint is imposed. ``frame`` is copied verbatim
+    from ``Issue.frame`` (task-relative). ``data`` holds the densified per-frame
+    view (plain shapes + interpolated tracks, vector types only, mask excluded).
+    """
+
+    issue = models.ForeignKey(
+        Issue, related_name="annotation_snapshots",
+        related_query_name="annotation_snapshot", on_delete=models.CASCADE,
+    )
+    job = models.ForeignKey(
+        Job, related_name="issue_annotation_snapshots", on_delete=models.CASCADE,
+    )
+    trigger = models.CharField(max_length=16, choices=IssueSnapshotTrigger.choices)
+    frame = models.PositiveIntegerField()
+    data = models.JSONField()
+
+
 class CloudProviderChoice(TextChoices):
     AMAZON_S3 = "AWS_S3_BUCKET", "Amazon S3"
     AZURE_BLOB_STORAGE = "AZURE_CONTAINER", "Azure Blob Storage"
