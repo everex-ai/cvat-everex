@@ -23,8 +23,9 @@ from cvat.apps.engine.issue_snapshots import (
     enqueue_issue_snapshot,
     run_issue_snapshot_capture,
 )
-from cvat.apps.engine.models import IssueSnapshotTrigger
+from cvat.apps.engine.models import IssueAnnotationSnapshot, IssueSnapshotTrigger
 from cvat.apps.engine.serializers import IssueWriteSerializer
+from cvat.apps.engine.tests.test_issue_snapshots_capture import _make_job
 from cvat.apps.engine.views import IssueViewSet
 
 _ENQUEUE = "cvat.apps.engine.issue_snapshots.enqueue_issue_snapshot"
@@ -133,4 +134,73 @@ class IssueViewSetSnapshotHookTest(TestCase):
 
         self._perform_update(issue, resolved=True).assert_called_once_with(
             issue.id, IssueSnapshotTrigger.AFTER
+        )
+
+
+class _SyncQueue:
+    """Stand-in for the RQ queue that runs the job inline, so the test drives the
+    real enqueue_issue_snapshot -> run_issue_snapshot_capture -> capture chain
+    without a live Redis/worker (the RQ transport itself is out of scope here)."""
+
+    def enqueue(self, func, *args, **kwargs):
+        return func(*args)
+
+
+class IssueSnapshotEndToEndTest(TestCase):
+    """Unmocked wiring: perform_create/update -> transaction.on_commit ->
+    enqueue_issue_snapshot -> (inline) run_issue_snapshot_capture -> capture ->
+    a persisted IssueAnnotationSnapshot row. Uses a data-backed job so capture
+    actually reaches build_snapshot_data; only the queue transport is stubbed."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = models.User.objects.create_user(username="e2e", password="x")
+
+    def _view(self):
+        view = IssueViewSet()
+        view.request = SimpleNamespace(user=self.user)
+        return view
+
+    def _run_inline(self, perform):
+        with mock.patch(
+            "cvat.apps.engine.issue_snapshots.django_rq.get_queue",
+            return_value=_SyncQueue(),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                perform()
+
+    def test_create_persists_before_snapshot(self):
+        _, job, _ = _make_job()
+        serializer = IssueWriteSerializer(
+            data={
+                "job": job.id,
+                "frame": 1,
+                "position": [0.0, 0.0, 1.0, 1.0],
+                "message": "bad keypoints",
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+        view = self._view()
+        self._run_inline(lambda: view.perform_create(serializer))
+        self.assertEqual(
+            IssueAnnotationSnapshot.objects.filter(
+                issue=serializer.instance, trigger=IssueSnapshotTrigger.BEFORE
+            ).count(),
+            1,
+        )
+
+    def test_resolve_persists_after_snapshot(self):
+        _, job, _ = _make_job()
+        issue = models.Issue.objects.create(
+            job=job, frame=1, position=[0.0, 0.0, 1.0, 1.0], resolved=False
+        )
+        serializer = IssueWriteSerializer(instance=issue, data={"resolved": True}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        view = self._view()
+        self._run_inline(lambda: view.perform_update(serializer))
+        self.assertEqual(
+            IssueAnnotationSnapshot.objects.filter(
+                issue=issue, trigger=IssueSnapshotTrigger.AFTER
+            ).count(),
+            1,
         )

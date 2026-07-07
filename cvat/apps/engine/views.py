@@ -2171,12 +2171,16 @@ class IssueViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
         else:
             return IssueWriteSerializer
 
+    @transaction.atomic
     def perform_create(self, serializer, **kwargs):
         serializer.save(owner=self.request.user)
         # Freeze the "bad" annotation state at the moment the reviewer raises the
         # issue. Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
+        # @transaction.atomic (as on TaskViewSet) makes the on_commit enqueue truly
+        # defer to commit; the request runs in autocommit otherwise.
         schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
 
+    @transaction.atomic
     def perform_update(self, serializer):
         was_resolved = serializer.instance.resolved
         super().perform_update(serializer)

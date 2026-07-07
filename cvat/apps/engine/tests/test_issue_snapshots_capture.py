@@ -286,3 +286,69 @@ class CaptureIssueSnapshotTest(TestCase):
         _, job, _ = _make_job(size=3)
         with self.assertRaises(ValueError):
             build_snapshot_data(job, 50)
+
+    def test_deleted_frame_is_noop(self):
+        # A frame inside the segment but marked deleted has no capturable state,
+        # so it must no-op rather than store a misleading empty snapshot.
+        task, job, _ = _make_job(size=5)
+        task.data.deleted_frames = [2]  # task-relative, same coord as Issue.frame
+        task.data.save()
+        issue = self._issue(job, frame=2)
+        self.assertIsNone(capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE))
+        self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
+
+    def test_invalid_trigger_raises(self):
+        _, job, _ = _make_job()
+        issue = self._issue(job, frame=0)
+        with self.assertRaises(ValueError):
+            capture_issue_snapshot(issue.pk, "not-a-trigger")
+
+    def test_skeleton_shape_captured_with_elements(self):
+        # End-to-end through the DB read path (this feature's core use case):
+        # a skeleton parent + parent-linked keypoint children must materialize as
+        # nested `elements` with sublabel names and per-keypoint occluded/outside.
+        _, job, labels = _make_job(label_names=("face", "left_eye", "right_eye"))
+        parent = models.LabeledShape.objects.create(
+            job=job,
+            label=labels["face"],
+            frame=2,
+            type="skeleton",
+            points=[],
+            source="manual",
+        )
+        models.LabeledShape.objects.create(
+            job=job,
+            label=labels["left_eye"],
+            parent=parent,
+            frame=2,
+            type="points",
+            points=[15.0, 15.0],
+            occluded=False,
+            outside=False,
+            source="manual",
+        )
+        models.LabeledShape.objects.create(
+            job=job,
+            label=labels["right_eye"],
+            parent=parent,
+            frame=2,
+            type="points",
+            points=[25.0, 25.0],
+            occluded=True,
+            outside=True,
+            source="manual",
+        )
+        issue = self._issue(job, frame=2)
+        snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE)
+
+        objects = snap.data["objects"]
+        self.assertEqual(len(objects), 1)
+        skeleton = objects[0]
+        self.assertEqual(skeleton["type"], "skeleton")
+        self.assertEqual(skeleton["label"], "face")
+        by_label = {e["label"]: e for e in skeleton["elements"]}
+        self.assertEqual(set(by_label), {"left_eye", "right_eye"})
+        self.assertEqual(by_label["left_eye"]["points"], [15.0, 15.0])
+        self.assertFalse(by_label["left_eye"]["outside"])
+        self.assertTrue(by_label["right_eye"]["occluded"])
+        self.assertTrue(by_label["right_eye"]["outside"])

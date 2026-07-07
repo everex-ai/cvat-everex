@@ -40,6 +40,7 @@ from cvat.apps.engine.models import (
     Issue,
     IssueAnnotationSnapshot,
     IssueSnapshotTrigger,
+    Job,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,12 @@ def build_snapshot_data(db_job, frame: int) -> dict:
     from cvat.apps.dataset_manager.bindings import JobData
     from cvat.apps.dataset_manager.task import JobAnnotation
 
+    # Fetch the job with the label / attribute-spec prefetch that every other
+    # JobAnnotation caller uses. A raw select_related job would N+1-query
+    # label_set + attributespec_set on every capture — worst for skeletons, this
+    # feature's own use case, where each keypoint sublabel is its own Label row.
+    db_job = JobAnnotation.add_prefetch_info(Job.objects.filter(pk=db_job.id)).get()
+
     annotation = JobAnnotation(pk=db_job.id, db_job=db_job)
     annotation.init_from_db()
 
@@ -106,6 +113,12 @@ def build_snapshot_data(db_job, frame: int) -> dict:
         raise ValueError(
             f"frame {frame} is outside job {db_job.id} segment range {job_data.rel_range}"
         )
+
+    # A frame inside the segment but absent from the included set is deleted or
+    # excluded (ground-truth / specific-frames job); there is no annotation state
+    # to capture, so no-op instead of storing a misleading empty snapshot.
+    if frame not in job_data.get_included_frames():
+        raise ValueError(f"frame {frame} is deleted or excluded in job {db_job.id}")
 
     data = {
         "frame": frame,  # task-relative, matches IssueAnnotationSnapshot.frame
