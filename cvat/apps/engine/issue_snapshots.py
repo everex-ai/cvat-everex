@@ -146,11 +146,7 @@ def capture_issue_snapshot(issue_id: int, trigger: str) -> IssueAnnotationSnapsh
     if trigger not in IssueSnapshotTrigger.values:
         raise ValueError(f"unknown snapshot trigger {trigger!r}")
 
-    issue = (
-        Issue.objects.select_related("job__segment__task__data")
-        .filter(pk=issue_id)
-        .first()
-    )
+    issue = Issue.objects.select_related("job__segment__task__data").filter(pk=issue_id).first()
     if issue is None:
         # Issue was deleted between enqueue and execution — nothing to capture.
         logger.info("Issue %s no longer exists; skipping %s snapshot", issue_id, trigger)
@@ -171,7 +167,12 @@ def capture_issue_snapshot(issue_id: int, trigger: str) -> IssueAnnotationSnapsh
     )
     logger.info(
         "Captured %s snapshot %s for issue %s (job %s, frame %s, %d objects)",
-        trigger, snapshot.id, issue_id, issue.job_id, issue.frame, len(data["objects"]),
+        trigger,
+        snapshot.id,
+        issue_id,
+        issue.job_id,
+        issue.frame,
+        len(data["objects"]),
     )
     return snapshot
 
@@ -187,9 +188,7 @@ def run_issue_snapshot_capture(issue_id: int, trigger: str) -> None:
     try:
         capture_issue_snapshot(issue_id, trigger)
     except Exception:  # noqa: BLE001 - deliberate catch-all; capture must not escalate
-        logger.exception(
-            "Failed to capture %s snapshot for issue %s", trigger, issue_id
-        )
+        logger.exception("Failed to capture %s snapshot for issue %s", trigger, issue_id)
 
 
 def enqueue_issue_snapshot(issue_id: int, trigger: str) -> None:
@@ -199,9 +198,7 @@ def enqueue_issue_snapshot(issue_id: int, trigger: str) -> None:
         queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
         queue.enqueue(run_issue_snapshot_capture, issue_id, trigger)
     except Exception:  # noqa: BLE001 - enqueue must not break issue create/resolve
-        logger.exception(
-            "Failed to enqueue %s snapshot for issue %s", trigger, issue_id
-        )
+        logger.exception("Failed to enqueue %s snapshot for issue %s", trigger, issue_id)
 
 
 def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:

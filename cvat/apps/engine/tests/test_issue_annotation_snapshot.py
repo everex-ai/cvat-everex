@@ -17,9 +17,9 @@ CI / by the developer; it is not expressed as a unit test here.
 from django.test import TestCase
 
 from cvat.apps.engine.models import (
+    Issue,
     IssueAnnotationSnapshot,
     IssueSnapshotTrigger,
-    Issue,
     Job,
     Segment,
     Task,
@@ -32,9 +32,7 @@ class IssueAnnotationSnapshotModelTest(TestCase):
         cls.task = Task.objects.create(name="snapshot-test", mode="annotation")
         cls.segment = Segment.objects.create(task=cls.task, start_frame=0, stop_frame=5)
         cls.job = Job.objects.create(segment=cls.segment)
-        cls.issue = Issue.objects.create(
-            job=cls.job, frame=0, position=[0.0, 0.0, 10.0, 10.0]
-        )
+        cls.issue = Issue.objects.create(job=cls.job, frame=0, position=[0.0, 0.0, 10.0, 10.0])
 
     def _snapshot(self, issue, trigger, frame=0, data=None):
         return IssueAnnotationSnapshot.objects.create(
@@ -53,9 +51,7 @@ class IssueAnnotationSnapshotModelTest(TestCase):
 
         self.assertEqual(self.issue.annotation_snapshots.count(), 3)
         self.assertEqual(
-            self.issue.annotation_snapshots.filter(
-                trigger=IssueSnapshotTrigger.AFTER
-            ).count(),
+            self.issue.annotation_snapshots.filter(trigger=IssueSnapshotTrigger.AFTER).count(),
             2,
         )
 
@@ -79,9 +75,7 @@ class IssueAnnotationSnapshotModelTest(TestCase):
         self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
 
     def test_cascade_on_job_delete(self):
-        issue = Issue.objects.create(
-            job=self.job, frame=1, position=[0.0, 0.0, 5.0, 5.0]
-        )
+        issue = Issue.objects.create(job=self.job, frame=1, position=[0.0, 0.0, 5.0, 5.0])
         self._snapshot(issue, IssueSnapshotTrigger.BEFORE, frame=1)
         self.assertEqual(IssueAnnotationSnapshot.objects.count(), 1)
 

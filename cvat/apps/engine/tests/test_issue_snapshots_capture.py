@@ -29,9 +29,20 @@ from cvat.apps.engine.models import IssueAnnotationSnapshot, IssueSnapshotTrigge
 class SerializeShapeTest(TestCase):
     def test_plain_shape_fields(self):
         shape = CommonData.LabeledShape(
-            type="rectangle", frame=3, label="car", points=[1.0, 2.0, 3.0, 4.0],
-            occluded=True, attributes=[], source="manual", rotation=15.0,
-            group=2, z_order=1, elements=(), outside=False, id=55, bbox=(),
+            type="rectangle",
+            frame=3,
+            label="car",
+            points=[1.0, 2.0, 3.0, 4.0],
+            occluded=True,
+            attributes=[],
+            source="manual",
+            rotation=15.0,
+            group=2,
+            z_order=1,
+            elements=(),
+            outside=False,
+            id=55,
+            bbox=(),
         )
         out = _serialize_shape(shape)
         self.assertEqual(out["id"], 55)
@@ -43,22 +54,44 @@ class SerializeShapeTest(TestCase):
         self.assertTrue(out["occluded"])
         self.assertFalse(out["outside"])
         self.assertNotIn("track_id", out)  # plain shapes carry no track id
-        self.assertNotIn("bbox", out)      # empty bbox is omitted
+        self.assertNotIn("bbox", out)  # empty bbox is omitted
         self.assertNotIn("elements", out)
 
     def test_skeleton_elements_recurse_with_sublabels(self):
         left = CommonData.LabeledShape(
-            type="points", frame=2, label="left_eye", points=[15.0, 15.0],
-            occluded=False, attributes=[], source="manual", outside=False, id=101,
+            type="points",
+            frame=2,
+            label="left_eye",
+            points=[15.0, 15.0],
+            occluded=False,
+            attributes=[],
+            source="manual",
+            outside=False,
+            id=101,
         )
         right = CommonData.LabeledShape(
-            type="points", frame=2, label="right_eye", points=[25.0, 25.0],
-            occluded=True, attributes=[], source="manual", outside=True, id=102,
+            type="points",
+            frame=2,
+            label="right_eye",
+            points=[25.0, 25.0],
+            occluded=True,
+            attributes=[],
+            source="manual",
+            outside=True,
+            id=102,
         )
         skeleton = CommonData.LabeledShape(
-            type="skeleton", frame=2, label="face", points=[], occluded=False,
-            attributes=[], source="manual", group=3, id=100,
-            bbox=(10.0, 10.0, 30.0, 30.0), elements=(left, right),
+            type="skeleton",
+            frame=2,
+            label="face",
+            points=[],
+            occluded=False,
+            attributes=[],
+            source="manual",
+            group=3,
+            id=100,
+            bbox=(10.0, 10.0, 30.0, 30.0),
+            elements=(left, right),
         )
         out = _serialize_shape(skeleton)
         self.assertEqual(out["type"], "skeleton")
@@ -74,10 +107,22 @@ class SerializeShapeTest(TestCase):
 
     def test_tracked_shape_carries_track_id(self):
         shape = CommonData.TrackedShape(
-            type="rectangle", frame=2, points=[20.0, 20.0, 30.0, 30.0],
-            occluded=False, outside=False, keyframe=False, attributes=[],
-            rotation=0.0, source="manual", group=0, z_order=0, label="car",
-            track_id=77, elements=(), id=None, bbox=(),
+            type="rectangle",
+            frame=2,
+            points=[20.0, 20.0, 30.0, 30.0],
+            occluded=False,
+            outside=False,
+            keyframe=False,
+            attributes=[],
+            rotation=0.0,
+            source="manual",
+            group=0,
+            z_order=0,
+            label="car",
+            track_id=77,
+            elements=(),
+            id=None,
+            bbox=(),
         )
         out = _serialize_shape(shape)
         self.assertEqual(out["track_id"], 77)
@@ -98,17 +143,19 @@ def _make_job(*, frame_step=1, start_frame=0, size=5, label_names=("obj",)):
     )
     for i in range(size):
         models.Image.objects.create(
-            data=db_data, path=f"frame_{i:06d}.png",
-            frame=start_frame + i * frame_step, width=100, height=100,
+            data=db_data,
+            path=f"frame_{i:06d}.png",
+            frame=start_frame + i * frame_step,
+            width=100,
+            height=100,
         )
     task = models.Task.objects.create(
-        name="snap-cap", mode="annotation", data=db_data,
+        name="snap-cap",
+        mode="annotation",
+        data=db_data,
         dimension=models.DimensionType.DIM_2D,
     )
-    labels = {
-        name: models.Label.objects.create(task=task, name=name)
-        for name in label_names
-    }
+    labels = {name: models.Label.objects.create(task=task, name=name) for name in label_names}
     segment = models.Segment.objects.create(task=task, start_frame=0, stop_frame=size - 1)
     job = models.Job.objects.create(segment=segment, type=models.JobType.ANNOTATION)
     return task, job, labels
@@ -116,9 +163,7 @@ def _make_job(*, frame_step=1, start_frame=0, size=5, label_names=("obj",)):
 
 class CaptureIssueSnapshotTest(TestCase):
     def _issue(self, job, frame):
-        return models.Issue.objects.create(
-            job=job, frame=frame, position=[0.0, 0.0, 5.0, 5.0]
-        )
+        return models.Issue.objects.create(job=job, frame=frame, position=[0.0, 0.0, 5.0, 5.0])
 
     def test_deleted_issue_is_noop(self):
         self.assertIsNone(capture_issue_snapshot(999999, IssueSnapshotTrigger.BEFORE))
@@ -145,9 +190,17 @@ class CaptureIssueSnapshotTest(TestCase):
     def test_plain_shape_captured(self):
         _, job, labels = _make_job(label_names=("car",))
         models.LabeledShape.objects.create(
-            job=job, label=labels["car"], frame=2, type="rectangle",
-            points=[10.0, 10.0, 20.0, 20.0], occluded=False, outside=False,
-            z_order=0, group=0, rotation=0.0, source="manual",
+            job=job,
+            label=labels["car"],
+            frame=2,
+            type="rectangle",
+            points=[10.0, 10.0, 20.0, 20.0],
+            occluded=False,
+            outside=False,
+            z_order=0,
+            group=0,
+            rotation=0.0,
+            source="manual",
         )
         issue = self._issue(job, frame=2)
         snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.AFTER)
@@ -160,12 +213,20 @@ class CaptureIssueSnapshotTest(TestCase):
     def test_mask_is_excluded(self):
         _, job, labels = _make_job(label_names=("car", "region"))
         models.LabeledShape.objects.create(
-            job=job, label=labels["car"], frame=2, type="rectangle",
-            points=[10.0, 10.0, 20.0, 20.0], source="manual",
+            job=job,
+            label=labels["car"],
+            frame=2,
+            type="rectangle",
+            points=[10.0, 10.0, 20.0, 20.0],
+            source="manual",
         )
         models.LabeledShape.objects.create(
-            job=job, label=labels["region"], frame=2, type="mask",
-            points=[1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 3.0, 3.0], source="manual",
+            job=job,
+            label=labels["region"],
+            frame=2,
+            type="mask",
+            points=[1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 3.0, 3.0],
+            source="manual",
         )
         issue = self._issue(job, frame=2)
         snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE)
@@ -178,12 +239,20 @@ class CaptureIssueSnapshotTest(TestCase):
             job=job, label=labels["car"], frame=0, group=0, source="manual"
         )
         models.TrackedShape.objects.create(
-            track=track, frame=0, type="rectangle",
-            points=[0.0, 0.0, 10.0, 10.0], occluded=False, outside=False,
+            track=track,
+            frame=0,
+            type="rectangle",
+            points=[0.0, 0.0, 10.0, 10.0],
+            occluded=False,
+            outside=False,
         )
         models.TrackedShape.objects.create(
-            track=track, frame=4, type="rectangle",
-            points=[40.0, 40.0, 50.0, 50.0], occluded=False, outside=False,
+            track=track,
+            frame=4,
+            type="rectangle",
+            points=[40.0, 40.0, 50.0, 50.0],
+            occluded=False,
+            outside=False,
         )
         issue = self._issue(job, frame=2)  # no keyframe here -> interpolated
         snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.AFTER)
@@ -198,11 +267,14 @@ class CaptureIssueSnapshotTest(TestCase):
     def test_frame_coordinate_under_frame_step(self):
         # step=2, media offset 100: task-relative issue.frame must be passed
         # through verbatim (NOT via rel_frame_id, which would raise for step!=1).
-        _, job, labels = _make_job(frame_step=2, start_frame=100, size=5,
-                                    label_names=("car",))
+        _, job, labels = _make_job(frame_step=2, start_frame=100, size=5, label_names=("car",))
         models.LabeledShape.objects.create(
-            job=job, label=labels["car"], frame=2, type="rectangle",
-            points=[7.0, 7.0, 8.0, 8.0], source="manual",
+            job=job,
+            label=labels["car"],
+            frame=2,
+            type="rectangle",
+            points=[7.0, 7.0, 8.0, 8.0],
+            source="manual",
         )
         issue = self._issue(job, frame=2)
         snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE)

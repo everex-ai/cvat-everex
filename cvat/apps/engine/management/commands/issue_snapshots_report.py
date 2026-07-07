@@ -33,11 +33,15 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--issue", type=int, default=None,
+            "--issue",
+            type=int,
+            default=None,
             help="Dump one issue's initial before vs final after, object by object.",
         )
         parser.add_argument(
-            "--job", type=int, default=None,
+            "--job",
+            type=int,
+            default=None,
             help="Restrict the aggregate summary to a single job id.",
         )
 
@@ -60,7 +64,9 @@ class Command(BaseCommand):
         if total == 0:
             return
 
-        by_trigger = {row["trigger"]: row["n"] for row in qs.values("trigger").annotate(n=Count("id"))}
+        by_trigger = {
+            row["trigger"]: row["n"] for row in qs.values("trigger").annotate(n=Count("id"))
+        }
         for trigger in IssueSnapshotTrigger.values:
             self.stdout.write(f"  {trigger}: {by_trigger.get(trigger, 0)}")
 
@@ -87,8 +93,9 @@ class Command(BaseCommand):
 
     def _dump_issue(self, issue_id):
         snaps = list(
-            IssueAnnotationSnapshot.objects.filter(issue_id=issue_id)
-            .order_by("trigger", "created_date", "id")
+            IssueAnnotationSnapshot.objects.filter(issue_id=issue_id).order_by(
+                "trigger", "created_date", "id"
+            )
         )
         if not snaps:
             raise CommandError(f"No snapshots for issue {issue_id}")
@@ -100,8 +107,8 @@ class Command(BaseCommand):
             f"(resolve_count={len(afters)})"
         )
 
-        before = befores[0] if befores else None   # initial bad
-        after = afters[-1] if afters else None      # final accepted good
+        before = befores[0] if befores else None  # initial bad
+        after = afters[-1] if afters else None  # final accepted good
         if before is None or after is None:
             self.stdout.write("  Incomplete correction — need one before and one after to diff.")
             return

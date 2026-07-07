@@ -28,13 +28,14 @@ class IssueSnapshotsReportTest(TestCase):
         cls.job = models.Job.objects.create(segment=cls.segment, type=models.JobType.ANNOTATION)
 
     def _issue(self, frame=0):
-        return models.Issue.objects.create(
-            job=self.job, frame=frame, position=[0.0, 0.0, 1.0, 1.0]
-        )
+        return models.Issue.objects.create(job=self.job, frame=frame, position=[0.0, 0.0, 1.0, 1.0])
 
     def _snap(self, issue, trigger, objects):
         return IssueAnnotationSnapshot.objects.create(
-            issue=issue, job=issue.job, trigger=trigger, frame=issue.frame,
+            issue=issue,
+            job=issue.job,
+            trigger=trigger,
+            frame=issue.frame,
             data={"frame": issue.frame, "objects": objects},
         )
 
@@ -67,7 +68,9 @@ class IssueSnapshotsReportTest(TestCase):
     def test_issue_dump_matches_and_flags_unmatched(self):
         issue = self._issue()
         skeleton_before = {
-            "id": 1, "type": "skeleton", "label": "face",
+            "id": 1,
+            "type": "skeleton",
+            "label": "face",
             "elements": [
                 {"id": 11, "type": "points", "label": "left_eye", "outside": False},
                 {"id": 12, "type": "points", "label": "right_eye", "outside": True},
@@ -75,7 +78,9 @@ class IssueSnapshotsReportTest(TestCase):
         }
         rect = {"id": 2, "type": "rectangle", "label": "car", "points": [0, 0, 10, 10]}
         skeleton_after = {
-            "id": 1, "type": "skeleton", "label": "face",
+            "id": 1,
+            "type": "skeleton",
+            "label": "face",
             "elements": [
                 {"id": 11, "type": "points", "label": "left_eye", "outside": False},
                 {"id": 12, "type": "points", "label": "right_eye", "outside": False},
@@ -86,10 +91,10 @@ class IssueSnapshotsReportTest(TestCase):
 
         out = _run(issue=issue.id)
         self.assertIn(f"Issue {issue.id}: 1 before, 1 after (resolve_count=1)", out)
-        self.assertIn("shape#1", out)          # skeleton matched
-        self.assertIn("kpts=1/2", out)         # before: 1 visible keypoint
-        self.assertIn("kpts=2/2", out)         # after: 2 visible keypoints
-        self.assertIn("shape#2", out)          # rectangle only in before
+        self.assertIn("shape#1", out)  # skeleton matched
+        self.assertIn("kpts=1/2", out)  # before: 1 visible keypoint
+        self.assertIn("kpts=2/2", out)  # after: 2 visible keypoints
+        self.assertIn("shape#2", out)  # rectangle only in before
         self.assertIn("<UNMATCHED>", out)
 
     def test_issue_dump_missing_after_is_incomplete(self):

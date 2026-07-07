@@ -32,9 +32,7 @@ _ENQUEUE = "cvat.apps.engine.issue_snapshots.enqueue_issue_snapshot"
 
 class IssueSnapshotWorkerTest(TestCase):
     def test_run_capture_invokes_capture(self):
-        with mock.patch(
-            "cvat.apps.engine.issue_snapshots.capture_issue_snapshot"
-        ) as capture:
+        with mock.patch("cvat.apps.engine.issue_snapshots.capture_issue_snapshot") as capture:
             run_issue_snapshot_capture(42, IssueSnapshotTrigger.BEFORE)
         capture.assert_called_once_with(42, IssueSnapshotTrigger.BEFORE)
 
@@ -69,12 +67,8 @@ class IssueViewSetSnapshotHookTest(TestCase):
     def setUpTestData(cls):
         cls.user = models.User.objects.create_user(username="rev", password="x")
         cls.task = models.Task.objects.create(name="hook-test", mode="annotation")
-        cls.segment = models.Segment.objects.create(
-            task=cls.task, start_frame=0, stop_frame=5
-        )
-        cls.job = models.Job.objects.create(
-            segment=cls.segment, type=models.JobType.ANNOTATION
-        )
+        cls.segment = models.Segment.objects.create(task=cls.task, start_frame=0, stop_frame=5)
+        cls.job = models.Job.objects.create(segment=cls.segment, type=models.JobType.ANNOTATION)
 
     def _view(self):
         view = IssueViewSet()
@@ -88,9 +82,7 @@ class IssueViewSetSnapshotHookTest(TestCase):
 
     def _perform_update(self, issue, resolved):
         """Run perform_update with the enqueue mocked; return the mock."""
-        serializer = IssueWriteSerializer(
-            instance=issue, data={"resolved": resolved}, partial=True
-        )
+        serializer = IssueWriteSerializer(instance=issue, data={"resolved": resolved}, partial=True)
         serializer.is_valid(raise_exception=True)
         with mock.patch(_ENQUEUE) as enq:
             with self.captureOnCommitCallbacks(execute=True):
