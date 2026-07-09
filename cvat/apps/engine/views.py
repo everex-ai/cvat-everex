@@ -65,6 +65,7 @@ from cvat.apps.engine.frame_provider import (
     JobFrameProvider,
     TaskFrameProvider,
 )
+from cvat.apps.engine.issue_snapshots import schedule_issue_snapshot
 from cvat.apps.engine.media_extractors import get_mime, get_video_chapters
 from cvat.apps.engine.mixins import BackupMixin, DatasetMixin, PartialUpdateModelMixin, UploadMixin
 from cvat.apps.engine.model_utils import bulk_create
@@ -78,6 +79,7 @@ from cvat.apps.engine.models import (
     Data,
     FrameQuality,
     Issue,
+    IssueSnapshotTrigger,
     Job,
     JobType,
     Label,
@@ -2169,8 +2171,27 @@ class IssueViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
         else:
             return IssueWriteSerializer
 
+    @transaction.atomic
     def perform_create(self, serializer, **kwargs):
         serializer.save(owner=self.request.user)
+        # Freeze the "bad" annotation state at the moment the reviewer raises the
+        # issue — that state is ephemeral and overwritten the moment it is fixed.
+        # The "good" state is durable and read live at export, so it is not
+        # snapshotted. Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
+        # @transaction.atomic (as on TaskViewSet) makes the on_commit enqueue truly
+        # defer to commit; the request runs in autocommit otherwise.
+        schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        was_resolved = serializer.instance.resolved
+        super().perform_update(serializer)
+        # A reopen (resolved true -> false) re-flags the frame: the current
+        # geometry is the rejected fix — another ephemeral "bad" state worth
+        # capturing as a further `before`. Resolves are not captured (the good
+        # state is durable and read live at export).
+        if was_resolved and not serializer.instance.resolved:
+            schedule_issue_snapshot(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
 
 @extend_schema(tags=['comments'])
 @extend_schema_view(

@@ -1290,6 +1290,44 @@ class Comment(TimestampedModel):
     def get_job_id(self):
         return self.issue.get_job_id()
 
+
+class IssueSnapshotTrigger(TextChoices):
+    # Phase 1 captures only the problematic "before" state; the field/enum are kept
+    # (rather than inlining the constant) as an extension point for a future trigger
+    # and to keep stored snapshots self-describing.
+    BEFORE = "before", "before"
+
+
+class IssueAnnotationSnapshot(TimestampedModel):
+    """Frozen densified annotation geometry of an Issue's frame.
+
+    We snapshot only the **problematic** (``before``) state, because it is
+    ephemeral — overwritten the moment the annotator fixes the flagged keypoints.
+    Captured server-side when the issue is created and each time it is reopened (a
+    rejected fix is another ephemeral bad state). The corrected "good" state is
+    durable and read live at export, so it is not stored here; export pairs each
+    captured bad state with the issue's ``Comment`` feedback and the live good
+    state into a ``{bad -> feedback -> good}`` correction sample.
+
+    Multiple rows per issue are expected and intended: one at creation plus one
+    per reopen (bad_v1, bad_v2, ...). No uniqueness constraint is imposed.
+    ``frame`` is copied verbatim from ``Issue.frame`` (task-relative). ``data``
+    holds the densified per-frame view (plain shapes + interpolated tracks, vector
+    types only, mask excluded).
+    """
+
+    issue = models.ForeignKey(
+        Issue, related_name="annotation_snapshots",
+        related_query_name="annotation_snapshot", on_delete=models.CASCADE,
+    )
+    job = models.ForeignKey(
+        Job, related_name="issue_annotation_snapshots", on_delete=models.CASCADE,
+    )
+    trigger = models.CharField(max_length=16, choices=IssueSnapshotTrigger.choices)
+    frame = models.PositiveIntegerField()
+    data = models.JSONField()
+
+
 class CloudProviderChoice(TextChoices):
     AMAZON_S3 = "AWS_S3_BUCKET", "Amazon S3"
     AZURE_BLOB_STORAGE = "AZURE_CONTAINER", "Azure Blob Storage"
