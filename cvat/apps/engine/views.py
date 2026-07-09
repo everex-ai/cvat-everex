@@ -65,10 +65,7 @@ from cvat.apps.engine.frame_provider import (
     JobFrameProvider,
     TaskFrameProvider,
 )
-from cvat.apps.engine.issue_snapshots import (
-    schedule_issue_snapshot,
-    schedule_job_acceptance_snapshots,
-)
+from cvat.apps.engine.issue_snapshots import schedule_issue_snapshot
 from cvat.apps.engine.media_extractors import get_mime, get_video_chapters
 from cvat.apps.engine.mixins import BackupMixin, DatasetMixin, PartialUpdateModelMixin, UploadMixin
 from cvat.apps.engine.model_utils import bulk_create
@@ -1713,24 +1710,6 @@ class JobViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateMo
 
         # Required for the extra summary information added in the queryset
         serializer.instance = self.get_queryset().get(pk=serializer.instance.pk)
-
-    @staticmethod
-    def _job_is_accepted(job) -> bool:
-        return (
-            job.stage == models.StageChoice.ACCEPTANCE
-            and job.state == models.StateChoice.COMPLETED
-        )
-
-    @transaction.atomic
-    def perform_update(self, serializer):
-        was_accepted = self._job_is_accepted(serializer.instance)
-        super().perform_update(serializer)
-        # When a job first reaches the accepted state, freeze the reviewed-and-
-        # accepted geometry as the "good" side (`after`) of every issue on the job.
-        # A reject -> re-accept transitions in again and captures another `after`.
-        # Best-effort and async — see cvat/apps/engine/issue_snapshots.py.
-        if not was_accepted and self._job_is_accepted(serializer.instance):
-            schedule_job_acceptance_snapshots(serializer.instance.id)
 
     @transaction.atomic
     def perform_destroy(self, instance):

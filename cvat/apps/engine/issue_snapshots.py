@@ -4,25 +4,18 @@
 
 """Capture a densified per-frame annotation snapshot for a review Issue.
 
-Two capture points, one per side of a ``{bad -> feedback -> good}`` correction:
+We only snapshot the **problematic** ("bad") state, because that state is
+*ephemeral*: the moment the annotator fixes the flagged keypoints it is
+overwritten and lost. The corrected ("good") state is *durable* — it simply is
+the current annotation — so it needs no snapshot; a later export phase reads it
+live from the DB and pairs it with the captured bad state and the issue's
+``Comment`` feedback into a ``{bad -> feedback -> good}`` training sample.
 
-* ``before`` — when a reviewer *raises* an issue, we freeze the geometry on the
-  issue's frame: the problematic state being flagged.
-* ``after`` — when the issue's **job is accepted** (``stage=acceptance`` &
-  ``state=completed``), we freeze every issue-frame of that job again: the final
-  reviewed-and-accepted version.
-
-Tying ``after`` to job acceptance (rather than to each issue resolve or each
-annotation save) sidesteps the fragile ordering between resolving an issue and
-saving the corrected annotations — those are independent requests with no ordering
-guarantee, so a resolve-before-save would otherwise capture pre-fix geometry.
-Acceptance is a single, unambiguous "this is the ground truth" signal; the
-accepted job state is the good version for every frame it flagged. A job rejected
-and re-accepted simply captures again, and a later phase takes the newest
-``after`` per issue. The feedback text lives in ``Comment`` rows and is joined at
-export time. Accumulated over many issues this yields the raw material for the
-keypoint-correction dataset (export / before-after matching are a later phase —
-see ``docs/plans/2026-07-07-001-...``).
+Capture point: ``before`` — when a reviewer *raises* an issue, we freeze the
+geometry on the issue's frame. Nothing is captured at resolve, save, or job
+completion: the good state is already safe in the DB. (Whether a *reopen* — a
+rejected fix, i.e. another ephemeral bad state — should also capture is an open
+design question.)
 
 Design notes
 ------------
@@ -237,44 +230,5 @@ def schedule_issue_snapshot(issue_id: int, trigger: str) -> None:
     """
     transaction.on_commit(
         lambda: enqueue_issue_snapshot(issue_id, trigger),
-        robust=True,
-    )
-
-
-def run_job_acceptance_snapshots(job_id: int) -> None:
-    """RQ worker entry (notifications queue): a job has been accepted, so freeze the
-    accepted geometry as the ``after`` for every issue on that job — one accepted
-    version is the ground-truth good state for all frames it flagged. Each issue is
-    isolated so one failure cannot drop the others, and the whole thing is
-    best-effort — it must never surface to the reviewer who accepted the job (R8)."""
-    try:
-        issue_ids = list(Issue.objects.filter(job_id=job_id).values_list("id", flat=True))
-    except Exception:  # noqa: BLE001 - capture is best-effort; never escalate
-        logger.exception("Failed to list issues for accepted job %s", job_id)
-        return
-
-    for issue_id in issue_ids:
-        try:
-            capture_issue_snapshot(issue_id, IssueSnapshotTrigger.AFTER)
-        except Exception:  # noqa: BLE001 - isolate per issue
-            logger.exception("Failed acceptance after snapshot for issue %s", issue_id)
-
-
-def enqueue_job_acceptance_snapshots(job_id: int) -> None:
-    """Enqueue the acceptance ``after`` capture on the notifications queue. Enqueue
-    failures are swallowed and logged — accepting a job must never fail because
-    snapshot observability is down (see R8)."""
-    try:
-        queue = django_rq.get_queue(settings.CVAT_QUEUES.NOTIFICATIONS.value)
-        queue.enqueue(run_job_acceptance_snapshots, job_id)
-    except Exception:  # noqa: BLE001 - enqueue must not break job acceptance
-        logger.exception("Failed to enqueue acceptance after snapshots for job %s", job_id)
-
-
-def schedule_job_acceptance_snapshots(job_id: int) -> None:
-    """Schedule the acceptance ``after`` capture once the job-update transaction
-    commits, so the worker reads the persisted accepted state."""
-    transaction.on_commit(
-        lambda: enqueue_job_acceptance_snapshots(job_id),
         robust=True,
     )

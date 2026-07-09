@@ -47,7 +47,7 @@ class IssueSnapshotsReportTest(TestCase):
         paired = self._issue(frame=0)
         self._snap(paired, IssueSnapshotTrigger.BEFORE, [])
         self._snap(paired, IssueSnapshotTrigger.AFTER, [])
-        self._snap(paired, IssueSnapshotTrigger.AFTER, [])  # reject -> re-accept
+        self._snap(paired, IssueSnapshotTrigger.AFTER, [])  # a second after row
 
         before_only = self._issue(frame=1)
         self._snap(before_only, IssueSnapshotTrigger.BEFORE, [])

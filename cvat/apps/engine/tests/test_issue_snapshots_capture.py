@@ -22,7 +22,6 @@ from cvat.apps.engine.issue_snapshots import (
     _serialize_shape,
     build_snapshot_data,
     capture_issue_snapshot,
-    run_job_acceptance_snapshots,
 )
 from cvat.apps.engine.models import IssueAnnotationSnapshot, IssueSnapshotTrigger
 
@@ -353,53 +352,3 @@ class CaptureIssueSnapshotTest(TestCase):
         self.assertFalse(by_label["left_eye"]["outside"])
         self.assertTrue(by_label["right_eye"]["occluded"])
         self.assertTrue(by_label["right_eye"]["outside"])
-
-
-class RunJobAcceptanceSnapshotsTest(TestCase):
-    """On job acceptance, freeze the accepted geometry as an `after` for every
-    issue on the job (one accepted version is the good state for all its frames)."""
-
-    def _issue(self, job, frame):
-        return models.Issue.objects.create(job=job, frame=frame, position=[0.0, 0.0, 5.0, 5.0])
-
-    def _rect(self, job, label, frame, points):
-        return models.LabeledShape.objects.create(
-            job=job, label=label, frame=frame, type="rectangle", points=points, source="manual"
-        )
-
-    def test_captures_after_for_every_issue_on_the_job(self):
-        _, job, labels = _make_job(label_names=("car",))
-        self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
-        self._rect(job, labels["car"], 2, [3.0, 3.0, 4.0, 4.0])
-        i1 = self._issue(job, 1)
-        i2 = self._issue(job, 2)
-        run_job_acceptance_snapshots(job.id)
-        for issue in (i1, i2):
-            afters = IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after")
-            self.assertEqual(afters.count(), 1)
-            self.assertEqual(afters.first().frame, issue.frame)
-
-    def test_re_acceptance_appends_another_after(self):
-        _, job, labels = _make_job(label_names=("car",))
-        self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
-        issue = self._issue(job, 1)
-        run_job_acceptance_snapshots(job.id)  # accept
-        run_job_acceptance_snapshots(job.id)  # reject -> re-accept
-        self.assertEqual(
-            IssueAnnotationSnapshot.objects.filter(issue=issue, trigger="after").count(), 2
-        )
-
-    def test_job_without_issues_captures_nothing(self):
-        _, job, _ = _make_job()
-        run_job_acceptance_snapshots(job.id)
-        self.assertEqual(IssueAnnotationSnapshot.objects.count(), 0)
-
-    def test_captures_moved_geometry(self):
-        _, job, labels = _make_job(label_names=("car",))
-        shape = self._rect(job, labels["car"], 1, [1.0, 1.0, 2.0, 2.0])
-        issue = self._issue(job, 1)
-        # The accepted state carries the corrected geometry.
-        models.LabeledShape.objects.filter(pk=shape.pk).update(points=[9.0, 9.0, 12.0, 12.0])
-        run_job_acceptance_snapshots(job.id)
-        after = IssueAnnotationSnapshot.objects.get(issue=issue, trigger="after")
-        self.assertEqual(after.data["objects"][0]["points"], [9.0, 9.0, 12.0, 12.0])
