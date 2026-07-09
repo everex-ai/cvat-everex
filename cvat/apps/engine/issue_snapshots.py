@@ -11,11 +11,13 @@ the current annotation — so it needs no snapshot; a later export phase reads i
 live from the DB and pairs it with the captured bad state and the issue's
 ``Comment`` feedback into a ``{bad -> feedback -> good}`` training sample.
 
-Capture point: ``before`` — when a reviewer *raises* an issue, we freeze the
-geometry on the issue's frame. Nothing is captured at resolve, save, or job
-completion: the good state is already safe in the DB. (Whether a *reopen* — a
-rejected fix, i.e. another ephemeral bad state — should also capture is an open
-design question.)
+Capture points, both storing ``before`` (a problematic state): when a reviewer
+*raises* an issue, and when a reviewer *reopens* one (``resolved`` true -> false)
+— a reopen re-flags a rejected fix, another ephemeral bad state. So one issue can
+accumulate several ``before`` rows (bad_v1 at creation, bad_v2.. per reopen), each
+a distinct rejected state; export pairs each with the ``Comment`` feedback that
+followed it and with the single durable good state read live from the DB. Nothing
+is captured at resolve, save, or job completion: the good state is already safe.
 
 Design notes
 ------------

@@ -56,7 +56,11 @@ class IssueSnapshotWorkerTest(TestCase):
             self.assertIsNone(enqueue_issue_snapshot(7, IssueSnapshotTrigger.BEFORE))
 
 
-class IssueCreateSnapshotHookTest(TestCase):
+class IssueSnapshotHookTest(TestCase):
+    """A `before` is scheduled on issue creation and on every reopen (resolved
+    true -> false), and on nothing else — resolves and no-op updates schedule
+    nothing (the good state is durable, read live at export)."""
+
     @classmethod
     def setUpTestData(cls):
         cls.user = models.User.objects.create_user(username="rev", password="x")
@@ -68,6 +72,19 @@ class IssueCreateSnapshotHookTest(TestCase):
         view = IssueViewSet()
         view.request = SimpleNamespace(user=self.user)
         return view
+
+    def _issue(self, resolved):
+        return models.Issue.objects.create(
+            job=self.job, frame=0, position=[0.0, 0.0, 1.0, 1.0], resolved=resolved
+        )
+
+    def _perform_update(self, issue, resolved):
+        serializer = IssueWriteSerializer(instance=issue, data={"resolved": resolved}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        with mock.patch(_ENQUEUE) as enq:
+            with self.captureOnCommitCallbacks(execute=True):
+                self._view().perform_update(serializer)
+        return enq
 
     def test_create_schedules_before(self):
         serializer = IssueWriteSerializer(
@@ -84,6 +101,33 @@ class IssueCreateSnapshotHookTest(TestCase):
                 self._view().perform_create(serializer)
         enq.assert_called_once_with(serializer.instance.id, IssueSnapshotTrigger.BEFORE)
 
+    def test_reopen_schedules_before(self):
+        issue = self._issue(resolved=True)
+        self._perform_update(issue, resolved=False).assert_called_once_with(
+            issue.id, IssueSnapshotTrigger.BEFORE
+        )
+
+    def test_resolve_does_not_schedule(self):
+        issue = self._issue(resolved=False)
+        self._perform_update(issue, resolved=True).assert_not_called()
+
+    def test_stay_resolved_does_not_schedule(self):
+        issue = self._issue(resolved=True)
+        self._perform_update(issue, resolved=True).assert_not_called()
+
+    def test_each_reopen_captures_again(self):
+        # resolve -> reopen -> re-resolve -> reopen: a `before` on each reopen only.
+        issue = self._issue(resolved=True)
+        self._perform_update(issue, resolved=False).assert_called_once_with(
+            issue.id, IssueSnapshotTrigger.BEFORE
+        )  # reopen 1
+        issue.refresh_from_db()
+        self._perform_update(issue, resolved=True).assert_not_called()  # re-resolve
+        issue.refresh_from_db()
+        self._perform_update(issue, resolved=False).assert_called_once_with(
+            issue.id, IssueSnapshotTrigger.BEFORE
+        )  # reopen 2
+
 
 class _SyncQueue:
     """Stand-in for the RQ queue that runs the job inline, so a test drives the
@@ -93,14 +137,19 @@ class _SyncQueue:
         return func(*args)
 
 
-class IssueCreateEndToEndTest(TestCase):
-    """Unmocked wiring: perform_create -> on_commit -> enqueue -> (inline)
-    run_issue_snapshot_capture -> a persisted ``before`` snapshot row. Only the
-    queue transport is stubbed."""
+class IssueSnapshotEndToEndTest(TestCase):
+    """Unmocked wiring: perform_create / perform_update -> on_commit -> enqueue ->
+    (inline) run_issue_snapshot_capture -> a persisted ``before`` snapshot row.
+    Only the queue transport is stubbed."""
 
     @classmethod
     def setUpTestData(cls):
         cls.user = models.User.objects.create_user(username="e2e", password="x")
+
+    def _view(self):
+        view = IssueViewSet()
+        view.request = SimpleNamespace(user=self.user)
+        return view
 
     def _run_inline(self, perform):
         with mock.patch(_GET_QUEUE, return_value=_SyncQueue()):
@@ -118,12 +167,27 @@ class IssueCreateEndToEndTest(TestCase):
             }
         )
         serializer.is_valid(raise_exception=True)
-        view = IssueViewSet()
-        view.request = SimpleNamespace(user=self.user)
+        view = self._view()
         self._run_inline(lambda: view.perform_create(serializer))
         self.assertEqual(
             IssueAnnotationSnapshot.objects.filter(
                 issue=serializer.instance, trigger=IssueSnapshotTrigger.BEFORE
+            ).count(),
+            1,
+        )
+
+    def test_reopen_persists_another_before_snapshot(self):
+        _, job, _ = _make_job()
+        issue = models.Issue.objects.create(
+            job=job, frame=1, position=[0.0, 0.0, 1.0, 1.0], resolved=True
+        )
+        serializer = IssueWriteSerializer(instance=issue, data={"resolved": False}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        view = self._view()
+        self._run_inline(lambda: view.perform_update(serializer))
+        self.assertEqual(
+            IssueAnnotationSnapshot.objects.filter(
+                issue=issue, trigger=IssueSnapshotTrigger.BEFORE
             ).count(),
             1,
         )
