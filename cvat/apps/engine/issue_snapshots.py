@@ -32,7 +32,7 @@ Design notes
   ``frame_step != 1``).
 * **Stable object ids.** ``use_server_track_ids=True`` so a track's ``track_id`` is
   its DB id (stable across snapshots), which a later phase needs to line up the
-  same object in the ``before`` and ``after`` snapshots.
+  same object across the captured ``before`` states and the live good state.
 * **Scope.** All vector shape types are captured (rectangle, polygon, polyline,
   points, ellipse, cuboid, skeleton + skeleton elements). ``mask`` is excluded —
   raw RLE is large and out of scope for keypoint correction.
@@ -93,7 +93,9 @@ def _serialize_shape(shape) -> dict:
 
 def build_snapshot_data(db_job, frame: int) -> dict:
     """Return the densified, filtered per-frame view for ``frame`` (task-relative)
-    of ``db_job``. Raises ValueError if the frame is outside the job's segment."""
+    of ``db_job``. Raises ValueError if ``frame`` is outside the job's segment, or
+    is inside it but deleted/excluded (ground-truth / specific-frames job) — in
+    both cases there is no annotation state worth capturing."""
     # Imported lazily: dataset_manager is heavy and pulls in datumaro; keeping the
     # import inside the call avoids paying that cost on every web-process start and
     # sidesteps any import ordering concerns with engine.models.
@@ -167,7 +169,9 @@ def capture_issue_snapshot(issue_id: int, trigger: str) -> IssueAnnotationSnapsh
     if trigger not in IssueSnapshotTrigger.values:
         raise ValueError(f"unknown snapshot trigger {trigger!r}")
 
-    issue = Issue.objects.select_related("job__segment__task__data").filter(pk=issue_id).first()
+    # Only issue.job is needed here (build_snapshot_data re-fetches the job with its
+    # own prefetch); a deeper select_related would JOIN segment/task/data for nothing.
+    issue = Issue.objects.select_related("job").filter(pk=issue_id).first()
     if issue is None:
         # Issue was deleted between enqueue and execution — nothing to capture.
         logger.info("Issue %s no longer exists; skipping %s snapshot", issue_id, trigger)

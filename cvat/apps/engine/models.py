@@ -1292,6 +1292,9 @@ class Comment(TimestampedModel):
 
 
 class IssueSnapshotTrigger(TextChoices):
+    # Phase 1 captures only the problematic "before" state; the field/enum are kept
+    # (rather than inlining the constant) as an extension point for a future trigger
+    # and to keep stored snapshots self-describing.
     BEFORE = "before", "before"
 
 
