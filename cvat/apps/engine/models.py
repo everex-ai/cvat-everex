@@ -1293,22 +1293,24 @@ class Comment(TimestampedModel):
 
 class IssueSnapshotTrigger(TextChoices):
     BEFORE = "before", "before"
-    AFTER = "after", "after"
 
 
 class IssueAnnotationSnapshot(TimestampedModel):
     """Frozen densified annotation geometry of an Issue's frame.
 
-    Captured server-side when the issue is created (``before``) and at each
-    resolve transition (``after``). Accumulates the raw material for a
-    COCO-Keypoints-derived ``{bad -> feedback -> good}`` correction dataset;
-    export / matching / diff belong to a later phase and are not stored here.
+    We snapshot only the **problematic** (``before``) state, because it is
+    ephemeral — overwritten the moment the annotator fixes the flagged keypoints.
+    Captured server-side when the issue is created and each time it is reopened (a
+    rejected fix is another ephemeral bad state). The corrected "good" state is
+    durable and read live at export, so it is not stored here; export pairs each
+    captured bad state with the issue's ``Comment`` feedback and the live good
+    state into a ``{bad -> feedback -> good}`` correction sample.
 
-    Multiple rows per issue are expected and intended: one ``before`` plus one
-    ``after`` per resolve transition (a reopen -> re-resolve appends another
-    ``after``). No uniqueness constraint is imposed. ``frame`` is copied verbatim
-    from ``Issue.frame`` (task-relative). ``data`` holds the densified per-frame
-    view (plain shapes + interpolated tracks, vector types only, mask excluded).
+    Multiple rows per issue are expected and intended: one at creation plus one
+    per reopen (bad_v1, bad_v2, ...). No uniqueness constraint is imposed.
+    ``frame`` is copied verbatim from ``Issue.frame`` (task-relative). ``data``
+    holds the densified per-frame view (plain shapes + interpolated tracks, vector
+    types only, mask excluded).
     """
 
     issue = models.ForeignKey(

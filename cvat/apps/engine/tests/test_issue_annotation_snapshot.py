@@ -5,8 +5,8 @@
 """Model-level tests for IssueAnnotationSnapshot (plan U1).
 
 Covers the two behaviours the schema deliberately guarantees:
-  * multiple snapshot rows may coexist for one issue (one ``before`` plus one
-    ``after`` per resolve transition — no uniqueness constraint), and
+  * multiple snapshot rows may coexist for one issue (one ``before`` at creation
+    plus one per reopen — no uniqueness constraint), and
   * snapshots are removed by CASCADE when their issue (or the owning job) goes
     away, so they never outlive the annotation context they describe.
 
@@ -44,15 +44,15 @@ class IssueAnnotationSnapshotModelTest(TestCase):
         )
 
     def test_multiple_rows_per_issue(self):
-        # One `before` plus two `after` rows (reopen -> re-resolve) coexist.
+        # Several `before` rows coexist: bad_v1 at creation + one per reopen.
         self._snapshot(self.issue, IssueSnapshotTrigger.BEFORE)
-        self._snapshot(self.issue, IssueSnapshotTrigger.AFTER)
-        self._snapshot(self.issue, IssueSnapshotTrigger.AFTER)
+        self._snapshot(self.issue, IssueSnapshotTrigger.BEFORE)
+        self._snapshot(self.issue, IssueSnapshotTrigger.BEFORE)
 
         self.assertEqual(self.issue.annotation_snapshots.count(), 3)
         self.assertEqual(
-            self.issue.annotation_snapshots.filter(trigger=IssueSnapshotTrigger.AFTER).count(),
-            2,
+            self.issue.annotation_snapshots.filter(trigger=IssueSnapshotTrigger.BEFORE).count(),
+            3,
         )
 
     def test_json_data_round_trips(self):
@@ -67,7 +67,7 @@ class IssueAnnotationSnapshotModelTest(TestCase):
 
     def test_cascade_on_issue_delete(self):
         self._snapshot(self.issue, IssueSnapshotTrigger.BEFORE)
-        self._snapshot(self.issue, IssueSnapshotTrigger.AFTER)
+        self._snapshot(self.issue, IssueSnapshotTrigger.BEFORE)
         self.assertEqual(IssueAnnotationSnapshot.objects.count(), 2)
 
         self.issue.delete()

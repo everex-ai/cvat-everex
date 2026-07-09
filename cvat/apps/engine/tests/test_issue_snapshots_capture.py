@@ -203,7 +203,7 @@ class CaptureIssueSnapshotTest(TestCase):
             source="manual",
         )
         issue = self._issue(job, frame=2)
-        snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.AFTER)
+        snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE)
         objects = snap.data["objects"]
         self.assertEqual(len(objects), 1)
         self.assertEqual(objects[0]["type"], "rectangle")
@@ -255,7 +255,7 @@ class CaptureIssueSnapshotTest(TestCase):
             outside=False,
         )
         issue = self._issue(job, frame=2)  # no keyframe here -> interpolated
-        snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.AFTER)
+        snap = capture_issue_snapshot(issue.pk, IssueSnapshotTrigger.BEFORE)
         objects = snap.data["objects"]
         self.assertEqual(len(objects), 1)
         self.assertEqual(objects[0]["type"], "rectangle")
