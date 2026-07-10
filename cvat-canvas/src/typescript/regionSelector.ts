@@ -72,16 +72,34 @@ export class RegionSelectorImpl implements RegionSelector {
     };
 
     private onMouseUp = (): void => {
-        const { offset } = this.geometry;
+        const { offset, scale } = this.geometry;
         if (this.selectionRect) {
-            const {
-                w, h, x, y, x2, y2,
-            } = this.selectionRect.bbox();
+            const box = this.selectionRect.bbox();
             this.selectionRect.remove();
             this.selectionRect = null;
-            if (w <= 1 && h <= 1) {
-                this.onRegionSelected([x - offset, y - offset]);
+
+            // The minimum is defined in screen pixels and converted to image
+            // coordinates via the current scale, so the perceived size stays
+            // constant across zoom levels and image resolutions.
+            const minSize = consts.MIN_REGION_SELECTION_SIZE / scale;
+
+            if (box.w < minSize && box.h < minSize) {
+                // Accidental click / micro-drag -> a point, drawn as a fixed-size circle.
+                this.onRegionSelected([box.x - offset, box.y - offset]);
             } else {
+                // Keep the rectangle, but grow any dimension below the minimum
+                // from the box center so a too-thin region stays visible.
+                let {
+                    x, y, x2, y2,
+                } = box;
+                if (box.w < minSize) {
+                    x = box.cx - minSize / 2;
+                    x2 = box.cx + minSize / 2;
+                }
+                if (box.h < minSize) {
+                    y = box.cy - minSize / 2;
+                    y2 = box.cy + minSize / 2;
+                }
                 this.onRegionSelected([x - offset, y - offset, x2 - offset, y2 - offset]);
             }
         }
