@@ -98,13 +98,13 @@ services:
       CVAT_ANALYTICS: 1
       CVAT_BASE_URL:
       ONE_RUNNING_JOB_IN_QUEUE_PER_USER:
-      CSRF_TRUSTED_ORIGINS: https://cvat-everex.mora.center,http://192.168.1.101:8081
+      CSRF_TRUSTED_ORIGINS: https://imagelab.mora.center,http://192.168.1.101:8081
     command: init run server
     labels:
       traefik.enable: "true"
       traefik.http.services.cvat-everex.loadbalancer.server.port: "8080"
       traefik.http.routers.cvat-everex.rule:
-        (Host(`cvat-everex.mora.center`) || Host(`192.168.1.101`)) &&
+        (Host(`imagelab.mora.center`) || Host(`192.168.1.101`)) &&
         (PathPrefix(`/api/`) || PathPrefix(`/static/`) || PathPrefix(`/admin`)
           || PathPrefix(`/django-rq`))
       traefik.http.routers.cvat-everex.entrypoints: web
@@ -265,7 +265,7 @@ services:
     labels:
       traefik.enable: "true"
       traefik.http.services.cvat-ui-everex.loadbalancer.server.port: "8000"
-      traefik.http.routers.cvat-ui-everex.rule: Host(`cvat-everex.mora.center`) || Host(`192.168.1.101`)
+      traefik.http.routers.cvat-ui-everex.rule: Host(`imagelab.mora.center`) || Host(`192.168.1.101`)
       traefik.http.routers.cvat-ui-everex.entrypoints: web
     networks:
       - cvat_everex
