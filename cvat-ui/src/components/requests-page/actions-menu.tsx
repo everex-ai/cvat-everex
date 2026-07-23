@@ -58,7 +58,10 @@ function RequestActionsComponent(props: Readonly<Props>): JSX.Element | null {
 
         requestsToDownload.forEach((request) => {
             const downloadAnchor = window.document.getElementById('downloadAnchor') as HTMLAnchorElement;
-            downloadAnchor.href = request.url!;
+            // Use only pathname + search to avoid mixed content (http vs https) issues
+            // when result_url is generated with the wrong scheme behind a reverse proxy
+            const parsedUrl = new URL(request.url!, window.location.origin);
+            downloadAnchor.href = parsedUrl.pathname + parsedUrl.search;
             downloadAnchor.click();
         });
     }, [requestsToAct]);

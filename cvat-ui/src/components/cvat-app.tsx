@@ -569,7 +569,7 @@ class CVATApplication extends React.PureComponent<CVATAppProps & RouteComponentP
                                     <SelectOrganizationModal />
                                     <BulkProgress />
                                     {/* eslint-disable-next-line */}
-                                    <a id='downloadAnchor' target='_blank' style={{ display: 'none' }} download />
+                                    <a id='downloadAnchor' style={{ display: 'none' }} download />
                                 </Layout.Content>
                             </Layout>
                         </ShortcutsContextProvider>
