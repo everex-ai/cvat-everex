@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 import { CombinedState } from 'reducers';
 
 function CVATLogo(): JSX.Element {
@@ -11,7 +12,9 @@ function CVATLogo(): JSX.Element {
 
     return (
         <div className='cvat-logo-icon'>
-            <img src={logo} alt='CVAT Logo' />
+            <Link to='/' aria-label='Go to the main page'>
+                <img src={logo} alt='CVAT Logo' />
+            </Link>
         </div>
     );
 }
