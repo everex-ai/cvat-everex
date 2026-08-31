@@ -1,0 +1,923 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [
+    {
+      "asDropdown": true,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Dashboards",
+      "tooltip": "",
+      "type": "dashboards",
+      "url": ""
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "프로젝트 요약  ·  실험의 task 1/2/3을 project로 전환해 비교",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 2,
+      "title": "승인된 job",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT count() AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 3,
+      "title": "작업자",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT uniqExact(worker) AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 4,
+      "title": "project 완료 시간",
+      "description": "벽시계. 착수부터 마지막 승인까지. 검수 대기와 야간을 포함한다.",
+      "type": "stat",
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT round(dateDiff('second', min(started_at), max(accepted_at)) / 86400, 1) AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 5,
+      "title": "총 실작업",
+      "description": "작업자 + 검수자의 send:working_time 합계. 자리비움 제외.",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT round(sum(effort_ms) / 3600000, 1) AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 6,
+      "title": "단일 검수 완료 시간",
+      "description": "job당 검수자 실작업 평균.",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT round(avg(reviewer_ms) / 60000, 1) AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 7,
+      "title": "job당 반려",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT round(avg(rejections), 2) AS v FROM jm",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 8,
+      "title": "작업자별 최초 / 전체 job",
+      "description": "실작업 비율 = 실작업 ÷ 벽시계. 이 값이 사람마다 크게 다르면 벽시계로 역량을 비교할 수 없다.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT\n    worker                                                    AS \"작업자\",\n    count()                                                   AS \"job\",\n    argMin(round(effort_ms / 60000, 1), accepted_at)          AS \"최초 job 실작업(분)\",\n    argMin(round(leadtime_s / 3600, 1), accepted_at)          AS \"최초 job 벽시계(h)\",\n    round(sum(effort_ms) / 3600000, 1)                        AS \"전체 실작업(h)\",\n    round(dateDiff('second', min(started_at), max(accepted_at)) / 3600, 1) AS \"전체 벽시계(h)\",\n    round(sum(effort_ms) / 3600000\n          / (dateDiff('second', min(started_at), max(accepted_at)) / 3600) * 100, 1) AS \"실작업 비율(%)\"\nFROM jm GROUP BY worker ORDER BY \"전체 실작업(h)\" DESC",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 9,
+      "title": "job 목록",
+      "description": "이상치를 찾은 뒤 아래 드릴다운에 job id를 넣는다.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_id FROM events\n        WHERE project_id = $project AND scope = 'update:job'\n          AND obj_name = 'stage' AND obj_val = 'acceptance'\n    ),\n    wt AS (\n        SELECT job_id, user_id, any(user_name) AS user_name, sum(duration) AS ms\n        FROM events\n        WHERE project_id = $project AND scope = 'send:working_time' AND job_id IS NOT NULL\n        GROUP BY job_id, user_id\n    ),\n    jm AS (\n        SELECT l.job_id AS job_id, w.worker AS worker, w.worker_ms AS worker_ms,\n               ifNull(r.reviewer_ms, 0) AS reviewer_ms,\n               w.worker_ms + ifNull(r.reviewer_ms, 0) AS effort_ms,\n               l.rejections AS rejections, l.started_at AS started_at, l.accepted_at AS accepted_at,\n               dateDiff('second', l.started_at, l.accepted_at) AS leadtime_s\n        FROM (\n            SELECT job_id,\n                   min(if(obj_name = 'state' AND obj_val = 'in progress', timestamp, NULL)) AS started_at,\n                   min(if(obj_name = 'stage' AND obj_val = 'acceptance',  timestamp, NULL)) AS accepted_at,\n                   countIf(obj_name = 'state' AND obj_val = 'rejected') AS rejections\n            FROM events\n            WHERE project_id = $project AND scope = 'update:job' AND job_id IS NOT NULL\n            GROUP BY job_id\n        ) l\n        LEFT JOIN (\n            SELECT job_id, argMax(user_name, ms) AS worker, sum(ms) AS worker_ms\n            FROM wt WHERE user_id NOT IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) w ON w.job_id = l.job_id\n        LEFT JOIN (\n            SELECT job_id, sum(ms) AS reviewer_ms\n            FROM wt WHERE user_id IN (SELECT user_id FROM reviewers) GROUP BY job_id\n        ) r ON r.job_id = l.job_id\n        WHERE l.accepted_at IS NOT NULL\n    )\nSELECT\n    job_id AS \"job\", worker AS \"작업자\",\n    round(worker_ms / 60000, 1)   AS \"가공(분)\",\n    round(reviewer_ms / 60000, 1) AS \"검수(분)\",\n    rejections                    AS \"반려\",\n    round(leadtime_s / 3600, 1)   AS \"벽시계(h)\",\n    accepted_at                   AS \"승인\"\nFROM jm ORDER BY accepted_at DESC",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "id": 10,
+      "title": "job 드릴다운  ·  위 $job_id 변수에 job id 하나를 입력",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 11,
+      "title": "라운드",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT max(round) AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 12,
+      "title": "반려/되돌림",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 4,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT max(round) - 1 AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 13,
+      "title": "최초 가공",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 8,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT round(sumIf(worker_ms, is_work AND round = 1) / 60000, 1) AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 14,
+      "title": "최초 검수",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT round(sumIf(reviewer_ms, NOT is_work AND round = 1) / 60000, 1) AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 15,
+      "title": "재가공 합계",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT round(sumIf(worker_ms, is_work AND round > 1) / 60000, 1) AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 16,
+      "title": "재검수 합계",
+      "description": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 20,
+        "y": 23,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT round(sumIf(reviewer_ms, NOT is_work AND round > 1) / 60000, 1) AS v FROM rounds",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "text",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "PDEE91DDB90597936"
+      },
+      "id": 17,
+      "title": "라운드별 가공 / 검수 / 재가공 / 재검수",
+      "description": "자기 구간이 아닌 쪽에도 소량 찍힐 수 있다. 90초 배치가 구간 경계를 걸치거나, 실제로 상대가 job을 열어본 경우다.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "PDEE91DDB90597936"
+          },
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "WITH\n    reviewers AS (\n        SELECT DISTINCT user_name FROM events\n        WHERE job_id = $job_id AND scope = 'update:job'\n          AND ((obj_name = 'stage' AND obj_val = 'acceptance')\n            OR (obj_name = 'state' AND obj_val = 'rejected'))\n    ),\n    wt AS (\n        SELECT timestamp AS ts, duration AS ms, user_name FROM events\n        WHERE job_id = $job_id AND scope = 'send:working_time'\n    ),\n    marks AS (\n        SELECT least((SELECT min(ts) FROM wt),\n                     (SELECT min(timestamp) FROM events\n                      WHERE job_id = $job_id AND scope = 'update:job')) AS ts, 'work' AS kind\n        UNION ALL\n        SELECT ts, kind FROM (\n            SELECT timestamp AS ts,\n                   multiIf(obj_name = 'state' AND obj_val = 'in progress', 'work',\n                           obj_name = 'state' AND obj_val = 'completed',   'review',\n                           obj_name = 'state' AND obj_val = 'rejected',    'rework',\n                           obj_name = 'stage' AND obj_val = 'acceptance',  'done', '') AS kind\n            FROM events WHERE job_id = $job_id AND scope = 'update:job'\n        ) WHERE kind != ''\n    ),\n    dedup AS (SELECT ts, argMin(kind, kind) AS kind FROM marks GROUP BY ts),\n    phases AS (\n        SELECT row_number() OVER (ORDER BY ts) AS seq, kind, ts AS p_start,\n               leadInFrame(ts) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS p_end_raw,\n               sum(kind = 'review') OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev\n        FROM dedup\n    ),\n    bounded AS (\n        SELECT seq, kind, p_start, if(p_end_raw <= p_start, NULL, p_end_raw) AS p_end,\n               cum_rev + (kind IN ('work', 'rework')) AS round\n        FROM phases WHERE kind != 'done'\n    ),\n    agg AS (\n        SELECT b.seq AS seq,\n               sumIf(w.ms, w.user_name NOT IN (SELECT user_name FROM reviewers)) AS worker_ms,\n               sumIf(w.ms, w.user_name     IN (SELECT user_name FROM reviewers)) AS reviewer_ms\n        FROM bounded b CROSS JOIN wt w\n        WHERE w.ts >= b.p_start AND (b.p_end IS NULL OR w.ts < b.p_end)\n        GROUP BY b.seq\n    ),\n    rounds AS (\n        SELECT round, is_work,\n               sum(worker_ms) AS worker_ms, sum(reviewer_ms) AS reviewer_ms,\n               min(p_start) AS started, max(p_end) AS ended\n        FROM (\n            SELECT b.round AS round, b.kind IN ('work', 'rework') AS is_work,\n                   b.p_start AS p_start, b.p_end AS p_end,\n                   ifNull(a.worker_ms, 0) AS worker_ms, ifNull(a.reviewer_ms, 0) AS reviewer_ms\n            FROM bounded b LEFT JOIN agg a ON a.seq = b.seq\n        ) GROUP BY round, is_work\n    )\nSELECT\n    round                                                       AS \"라운드\",\n    if(is_work, if(round = 1, '가공', '재가공'),\n                if(round = 1, '검수', '재검수'))                 AS \"단계\",\n    round(worker_ms   / 60000, 1)                               AS \"작업자(분)\",\n    round(reviewer_ms / 60000, 1)                               AS \"검수자(분)\",\n    round(dateDiff('second', started, ended) / 60, 1)           AS \"경과(분)\",\n    started                                                     AS \"시작\",\n    ended                                                       AS \"종료\"\nFROM rounds ORDER BY round, is_work DESC",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "9.3.6",
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "cvat",
+    "annotation-time"
+  ],
+  "templating": {
+    "list": [
+      {
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "PDEE91DDB90597936"
+        },
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "definition": "SELECT DISTINCT project_id FROM events WHERE project_id IS NOT NULL ORDER BY project_id DESC",
+        "query": "SELECT DISTINCT project_id FROM events WHERE project_id IS NOT NULL ORDER BY project_id DESC",
+        "refresh": 1,
+        "sort": 0,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "options": [],
+        "regex": "",
+        "skipUrlSync": false,
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        }
+      },
+      {
+        "name": "job_id",
+        "label": "Job ID",
+        "type": "textbox",
+        "query": "",
+        "hide": 0,
+        "options": [],
+        "skipUrlSync": false,
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Annotation Time",
+  "uid": "cvat-annot-time",
+  "version": 1,
+  "weekStart": ""
+}

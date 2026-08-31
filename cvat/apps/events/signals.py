@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
@@ -22,7 +23,7 @@ from cvat.apps.organizations.models import Invitation, Membership, Organization
 from cvat.apps.webhooks.models import Webhook
 
 from .event import EventScopeChoice, event_scope
-from .handlers import handle_create, handle_delete, handle_update
+from .handlers import handle_create, handle_delete, handle_update, handle_user_auth
 
 
 @receiver(pre_save, sender=AccessToken)
@@ -121,3 +122,17 @@ def resource_delete(sender, instance, **kwargs):
         return
 
     handle_delete(scope=scope, instance=instance, **kwargs)
+
+
+@receiver(user_logged_in)
+def user_login(sender, user, **kwargs):
+    handle_user_auth(scope=event_scope("login", "user"), user=user)
+
+
+@receiver(user_logged_out)
+def user_logout(sender, user, **kwargs):
+    if user is None:
+        # django.contrib.auth.logout() fires this signal even for anonymous requests
+        return
+
+    handle_user_auth(scope=event_scope("logout", "user"), user=user)
