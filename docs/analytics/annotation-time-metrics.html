@@ -1,0 +1,416 @@
+<title>가공 시간 계측 설계</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground:  #F6F7F9;
+    --surface: #FFFFFF;
+    --sunken:  #EDEFF3;
+    --ink:     #151E27;
+    --muted:   #5A6774;
+    --faint:   #8A97A4;
+    --rule:    #DDE2E8;
+    --effort:  #B4640E;
+    --lead:    #3A6B8F;
+    --alert:   #9E2F2F;
+    --shadow:  0 1px 2px rgba(21,30,39,.05), 0 8px 24px -18px rgba(21,30,39,.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:  #0F151C;
+      --surface: #161E27;
+      --sunken:  #1C252F;
+      --ink:     #E3E9EF;
+      --muted:   #93A1AF;
+      --faint:   #6E7E8D;
+      --rule:    #28323D;
+      --effort:  #E0913C;
+      --lead:    #77A9CC;
+      --alert:   #D97070;
+      --shadow:  0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:  #0F151C;
+    --surface: #161E27;
+    --sunken:  #1C252F;
+    --ink:     #E3E9EF;
+    --muted:   #93A1AF;
+    --faint:   #6E7E8D;
+    --rule:    #28323D;
+    --effort:  #E0913C;
+    --lead:    #77A9CC;
+    --alert:   #D97070;
+    --shadow:  0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+    font-weight: 400;
+    line-height: 1.72;
+    font-size: 15.5px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 72px 28px 120px;
+  }
+
+  /* ---- masthead ---- */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 26px; margin-bottom: 8px; }
+  .kicker {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; font-weight: 500; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--effort); margin-bottom: 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 42px); font-weight: 700; line-height: 1.18;
+    letter-spacing: -.02em; margin: 0 0 14px; text-wrap: balance;
+  }
+  .standfirst { font-size: 17px; color: var(--muted); font-weight: 300; max-width: 60ch; margin: 0; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 22px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--faint);
+  }
+  .meta b { color: var(--muted); font-weight: 500; }
+
+  /* ---- tick rail ---- */
+  section { position: relative; padding: 52px 0 0 34px; }
+  section::before {
+    content: ""; position: absolute; left: 0; top: 62px; bottom: 6px;
+    width: 1px; background: var(--rule);
+  }
+  section::after {
+    content: ""; position: absolute; left: -4px; top: 62px;
+    width: 9px; height: 1px; background: var(--effort);
+  }
+  h2 {
+    font-size: 22px; font-weight: 600; letter-spacing: -.015em;
+    margin: 0 0 6px; text-wrap: balance;
+  }
+  .sublede { color: var(--muted); font-size: 14.5px; margin: 0 0 26px; max-width: 62ch; font-weight: 300; }
+  p { margin: 0 0 17px; max-width: 68ch; }
+  strong { font-weight: 600; }
+
+  /* ---- two clocks ---- */
+  .clocks { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin: 4px 0 26px; }
+  .clock {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-top: 3px solid var(--c); border-radius: 3px;
+    padding: 20px 22px 22px; box-shadow: var(--shadow);
+  }
+  .clock.effort { --c: var(--effort); }
+  .clock.lead   { --c: var(--lead); }
+  .clock h3 {
+    font-size: 15px; font-weight: 600; margin: 0 0 3px; color: var(--c);
+  }
+  .clock .src {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px;
+    color: var(--faint); margin: 0 0 12px;
+  }
+  .clock p { font-size: 13.8px; margin: 0; color: var(--muted); line-height: 1.62; }
+
+  /* ---- figure ---- */
+  figure { margin: 26px 0 8px; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 12.8px; color: var(--faint); margin-top: 12px; max-width: 64ch; line-height: 1.6; }
+  .mk-rej { fill: var(--alert); }
+  .n-box { fill: var(--surface); stroke: var(--rule); }
+  .n-name { fill: var(--ink); font-weight: 600; }
+  .n-role-w { fill: var(--effort); }
+  .n-role-r { fill: var(--lead); }
+  .n-ev { fill: var(--faint); }
+  .lp { stroke: var(--alert); }
+  .lp-t { fill: var(--alert); }
+
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; margin: 8px 0 10px; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.4px; }
+  th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  thead th {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.8px; font-weight: 500;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--faint);
+    background: var(--sunken); border-bottom: 1px solid var(--rule);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; text-align: right; }
+  td.eff { color: var(--effort); }
+  td.led { color: var(--lead); }
+  td.name { font-weight: 500; }
+  code {
+    font-family: "IBM Plex Mono", monospace; font-size: .875em;
+    background: var(--sunken); padding: 1.5px 5px; border-radius: 2px; color: var(--ink);
+  }
+  .caption { font-size: 12.5px; color: var(--faint); margin: 0 0 22px; }
+
+  /* ---- callout ---- */
+  .note {
+    background: var(--sunken); border-left: 3px solid var(--lead);
+    padding: 15px 18px; margin: 4px 0 22px; border-radius: 0 3px 3px 0;
+  }
+  .note.warn { border-left-color: var(--alert); }
+  .note p { margin: 0; font-size: 14px; color: var(--muted); max-width: none; }
+  .note p + p { margin-top: 9px; }
+  .note b { color: var(--ink); font-weight: 600; }
+
+  /* ---- checklist ---- */
+  ol.checks { list-style: none; padding: 0; margin: 4px 0 8px; counter-reset: c; }
+  ol.checks li {
+    counter-increment: c; position: relative; padding: 0 0 16px 40px;
+    max-width: 68ch; font-size: 14.6px;
+  }
+  ol.checks li::before {
+    content: counter(c, decimal-leading-zero);
+    position: absolute; left: 0; top: 3px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 600;
+    color: var(--effort); letter-spacing: .04em;
+  }
+  ol.checks b { display: block; font-weight: 600; margin-bottom: 1px; }
+  ol.checks span { color: var(--muted); font-size: 13.8px; }
+
+  pre {
+    background: var(--sunken); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 14px 16px; overflow-x: auto; margin: 6px 0 18px;
+    font-family: "IBM Plex Mono", monospace; font-size: 12.4px; line-height: 1.62; color: var(--ink);
+  }
+  pre .c { color: var(--faint); }
+
+  footer {
+    margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--faint);
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">Expert 모델 가속 효과 측정</div>
+    <h1>가공 시간 계측 설계</h1>
+    <p class="standfirst">작업자와 검수자가 실제로 쓴 시간을 어떻게 잴 것인가. CVAT가 이미 수집 중인 이벤트만으로 목표 테이블을 채울 수 있다.</p>
+    <div class="meta">
+      <span><b>검증 데이터</b> 프로덕션 덤프 11,722,376행</span>
+      <span><b>기간</b> 2026-03-18 → 08-24</span>
+      <span><b>대상</b> 13명 · 27개 프로젝트</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>핵심: 두 개의 시계를 섞지 않는다</h2>
+    <p class="sublede">같은 job에 대해 두 값이 5~10배 차이 난다. 어느 쪽을 쓰느냐가 결론을 바꾼다.</p>
+
+    <div class="clocks">
+      <div class="clock effort">
+        <h3>실작업 시간 · effort</h3>
+        <p class="src">send:working_time</p>
+        <p>연속된 사용자 액션 사이의 간격을 더하되, 100초를 넘는 간격은 버린다. 자리비움·야간·검수 대기가 자동으로 빠진다. job 단위로 이미 쪼개져 있다.</p>
+      </div>
+      <div class="clock lead">
+        <h3>벽시계 시간 · leadtime</h3>
+        <p class="src">update:job 전이 간격</p>
+        <p>착수부터 최종 승인까지 흐른 실제 시간. 검수 대기와 야간·주말을 포함한다. 프로젝트가 언제 끝나는지는 이 시계로만 답할 수 있다.</p>
+      </div>
+    </div>
+
+    <p>실측 결과 <strong>벽시계 중 실작업 비율은 9~18%</strong>였다. 나머지 82~91%는 검수 대기, 야간, 자리비움이다. 그래서 지표를 이렇게 나눈다.</p>
+
+    <div class="note">
+      <p><b>모델 효과(p) 추정 → effort.</b> 가속 효과만 보려면 대기 시간이 섞이면 안 된다.</p>
+      <p><b>project 완료 시간 → leadtime.</b> 검수 왕복이 직렬화되는 비용이 이 지표의 본질이다.</p>
+    </div>
+
+    <div class="note warn">
+      <p><b>로그인/로그아웃 시각만으로는 부족하다.</b> 자리비움 1회당 최대 10분씩 오차가 누적되고, 로그인 세션 길이로는 job별 시간을 나눌 수 없다. 다만 로그인 기록은 <em>컴플라이언스 증거</em>로서 가치가 있다 &mdash; 세션 길이 대비 실작업 비율이 낮으면 "로그인만 해두고 자리를 비웠다"가 데이터로 남는다.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>워크플로와 이를 표시하는 이벤트</h2>
+    <p class="sublede">프로덕션 project 147의 실제 전이를 그대로 옮긴 것이다. 모든 전이는 <code>update:job</code>으로 기록되며, 행위자가 <code>user_name</code>에 정확히 남는다.</p>
+
+    <figure>
+      <svg viewBox="0 0 880 178" role="img" aria-label="작업자가 착수하고 검수를 요청하면 검수자가 반려하거나 승인한다. 반려된 job은 작업자에게 돌아가 재작업 후 다시 검수 요청된다.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+          </marker>
+          <marker id="arRej" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="mk-rej" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+        </defs>
+
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" class="n-ev" text-anchor="middle">
+          <text x="101" y="14">state new → in progress</text>
+          <text x="307" y="14">state → completed</text>
+          <text x="513" y="14">state → rejected</text>
+          <text x="719" y="14">stage → acceptance</text>
+        </g>
+
+        <g>
+          <rect class="n-box" x="16"  y="26" width="170" height="64" rx="3" stroke-width="1"/>
+          <rect class="n-box" x="222" y="26" width="170" height="64" rx="3" stroke-width="1"/>
+          <rect class="n-box" x="428" y="26" width="170" height="64" rx="3" stroke-width="1"/>
+          <rect class="n-box" x="634" y="26" width="170" height="64" rx="3" stroke-width="1"/>
+        </g>
+
+        <g font-family="IBM Plex Sans KR, sans-serif" font-size="15" class="n-name" text-anchor="middle">
+          <text x="101" y="55">착수</text>
+          <text x="307" y="55">검수 요청</text>
+          <text x="513" y="55">검수</text>
+          <text x="719" y="55">최종 승인</text>
+        </g>
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle">
+          <text x="101" y="76" class="n-role-w">작업자</text>
+          <text x="307" y="76" class="n-role-w">작업자</text>
+          <text x="513" y="76" class="n-role-r">검수자</text>
+          <text x="719" y="76" class="n-role-r">검수자</text>
+        </g>
+
+        <g stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)" fill="none">
+          <line x1="186" y1="58" x2="214" y2="58"/>
+          <line x1="392" y1="58" x2="420" y2="58"/>
+          <line x1="598" y1="58" x2="626" y2="58"/>
+        </g>
+
+        <path class="lp" d="M513 90 C 513 136, 307 136, 307 96" fill="none" stroke-width="1.4" marker-end="url(#arRej)"/>
+        <text x="410" y="160" class="lp-t" font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle">반려 → 재작업 (project 147에서 144회)</text>
+      </svg>
+      <figcaption>승인 118건에 반려 144건 &mdash; job당 평균 1.21회 되돌아간다. 재작업 시간은 같은 <code>job_id</code>·같은 작업자로 계속 누적되므로 별도 처리가 필요 없다.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>job 하나를 찍으면 나오는 것</h2>
+    <p class="sublede">job_id 하나만 넣으면 라운드별로 가공·검수·재가공·재검수가 분리된다. 구간은 위 전이로 자르고, 그 구간에 떨어지는 실작업 시간을 작업자와 검수자로 나눠 합산한다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>라운드</th><th>단계</th><th>작업자</th><th>검수자</th><th>경과</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td class="name">가공</td><td class="num eff">727.9분</td><td class="num">&mdash;</td><td class="num led">5623.5분</td></tr>
+          <tr><td class="num">1</td><td class="name">검수</td><td class="num">5.7분</td><td class="num eff">31.9분</td><td class="num led">154.5분</td></tr>
+          <tr><td class="num">2</td><td class="name">재가공</td><td class="num eff">193.5분</td><td class="num">&mdash;</td><td class="num led">4068.9분</td></tr>
+          <tr><td class="num">2</td><td class="name">재검수</td><td class="num">1.0분</td><td class="num eff">11.7분</td><td class="num led">19.8분</td></tr>
+          <tr><td class="num">3</td><td class="name">재가공</td><td class="num eff">126.7분</td><td class="num">&mdash;</td><td class="num led">223.2분</td></tr>
+          <tr><td class="num">3</td><td class="name">재검수</td><td class="num">2.3분</td><td class="num eff">14.1분</td><td class="num led">33.9분</td></tr>
+          <tr><td class="num">4</td><td class="name">재가공</td><td class="num eff">19.0분</td><td class="num">&mdash;</td><td class="num led">23.2분</td></tr>
+          <tr><td class="num">4</td><td class="name">재검수</td><td class="num">0.4분</td><td class="num eff">7.2분</td><td class="num led">25.5분</td></tr>
+          <tr><td class="num">5</td><td class="name">재가공</td><td class="num eff">8.5분</td><td class="num">&mdash;</td><td class="num led">8.8분</td></tr>
+          <tr><td class="num">5</td><td class="name">재검수</td><td class="num">0.2분</td><td class="num eff">5.5분</td><td class="num led">9.0분</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">실제 job 74137 (project 124). 재가공이 193.5 → 126.7 → 19.0 → 8.5분으로 수렴하고, 재검수도 11.7 → 14.1 → 7.2 → 5.5분으로 줄어든다. 한 번의 큰 가공 뒤 네 번의 짧은 교정 사이클이다.</p>
+
+    <div class="clocks">
+      <div class="clock effort">
+        <h3>한 줄 요약 · job 74137</h3>
+        <p class="src">5라운드 · 반려 4회</p>
+        <p>최초 가공 <b>727.9분</b> · 최초 검수 <b>31.9분</b><br>재가공 합계 <b>347.7분</b> · 재검수 합계 <b>38.5분</b><br>총 가공 <b>1085.2분</b> · 총 검수 <b>70.4분</b></p>
+      </div>
+      <div class="clock lead">
+        <h3>같은 job의 벽시계</h3>
+        <p class="src">착수 → 최종 승인</p>
+        <p><b>169.8시간</b> (7.1일)<br>실작업 합계는 <b>19.3시간</b>이므로 실작업 비율 <b>11.4%</b>. 나머지는 검수 대기와 야간이다.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <p><b>자기 구간이 아닌 쪽에도 소량 찍힌다.</b> 위 표에서 검수 구간의 "작업자" 열에 0.2~5.7분이 보인다. 90초 배치가 구간 경계를 걸쳤거나, 실제로 상대가 job을 열어본 경우다. 크기가 작아 해석에 영향을 주지 않지만, 0으로 반올림하지 않고 그대로 노출한다.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>목표 테이블의 각 칸을 무엇으로 채우는가</h2>
+    <p class="sublede">전부 기존 이벤트에서 나온다. 새로 심을 계측은 없다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>목표 칸</th><th>계산</th><th>출처 이벤트</th></tr></thead>
+        <tbody>
+          <tr><td class="name">단일 Job 완료 시간</td><td>작업자 effort + 검수자 effort</td><td><code>send:working_time</code></td></tr>
+          <tr><td class="name">단일 검수 완료 시간</td><td>검수자 effort 평균</td><td><code>send:working_time</code></td></tr>
+          <tr><td class="name">최초 Job 완료 시간</td><td>가장 먼저 승인된 job 1건</td><td>+ <code>update:job</code></td></tr>
+          <tr><td class="name">모든 Job 완료 시간</td><td>작업자별 effort 합계</td><td><code>send:working_time</code></td></tr>
+          <tr><td class="name">project 완료 시간</td><td>max(승인) − min(착수)</td><td><code>update:job</code></td></tr>
+          <tr><td class="name">task 1 대비 단축율</td><td>(T₁ − Tₓ) ÷ T₁</td><td>위 값에서 파생</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">역할은 자동 판별한다 &mdash; <code>stage → acceptance</code> 전이를 수행한 사람이 검수자, job별 실작업이 가장 많은 비검수자가 작업자.</p>
+
+    <p>job 진입 시점의 state·stage도 필요하면 복원할 수 있다. <code>load:job</code>에는 담겨 있지 않지만, <code>create:job</code>의 초기값에서 시작해 전이 이력을 as-of 조회하면 나온다. <strong>소급 적용되므로 과거 데이터에도 그대로 쓸 수 있다.</strong></p>
+  </section>
+
+  <section>
+    <h2>실측 검증</h2>
+    <p class="sublede">쿼리를 프로덕션 덤프의 실제 프로젝트 3개에 돌린 결과다. 실험이 아직 시작되지 않았으므로 이 숫자는 쿼리가 동작한다는 증거이지, 실험 결과가 아니다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>project</th><th>job</th><th>작업자</th><th>기간</th><th>실작업 합</th><th>가공/job</th><th>검수/job</th><th>반려/job</th></tr></thead>
+        <tbody>
+          <tr><td class="name">147</td><td class="num">118</td><td class="num">5</td><td class="num led">54.9일</td><td class="num eff">720.5h</td><td class="num eff">289.6분</td><td class="num eff">76.8분</td><td class="num">1.21</td></tr>
+          <tr><td class="name">141</td><td class="num">360</td><td class="num">6</td><td class="num led">24.4일</td><td class="num eff">496.5h</td><td class="num eff">79.8분</td><td class="num eff">3.0분</td><td class="num">0.52</td></tr>
+          <tr><td class="name">124</td><td class="num">141</td><td class="num">8</td><td class="num led">99.2일</td><td class="num eff">1827.6h</td><td class="num eff">741.9분</td><td class="num eff">35.8분</td><td class="num">1.06</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">세 프로젝트의 job당 가공 시간이 80분~742분으로 크게 다르다 &mdash; 데이터셋 난이도(d) 통제가 왜 중요한지 보여준다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>작업자</th><th>job</th><th>최초 job 실작업</th><th>최초 job 벽시계</th><th>전체 실작업</th><th>전체 벽시계</th><th>실작업 비율</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Chloe</td><td class="num">37</td><td class="num eff">711.4분</td><td class="num led">67.9h</td><td class="num eff">232.5h</td><td class="num led">1315.5h</td><td class="num">17.7%</td></tr>
+          <tr><td class="name">Lenaa</td><td class="num">34</td><td class="num eff">480.0분</td><td class="num led">51.9h</td><td class="num eff">191.5h</td><td class="num led">1126.2h</td><td class="num">17.0%</td></tr>
+          <tr><td class="name">cherry</td><td class="num">25</td><td class="num eff">547.5분</td><td class="num led">70.0h</td><td class="num eff">137.5h</td><td class="num led">1080.0h</td><td class="num">12.7%</td></tr>
+          <tr><td class="name">Jinaa</td><td class="num">11</td><td class="num eff">775.5분</td><td class="num led">193.8h</td><td class="num eff">91.0h</td><td class="num led">574.7h</td><td class="num">15.8%</td></tr>
+          <tr><td class="name">Amuse</td><td class="num">11</td><td class="num eff">334.5분</td><td class="num led">52.4h</td><td class="num eff">68.1h</td><td class="num led">741.0h</td><td class="num">9.2%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">project 147 · 작업자 5명. 실작업 비율이 9.2%~17.7%로 사람마다 두 배 가까이 벌어진다 &mdash; 벽시계로 역량(v)을 비교하면 이 차이가 그대로 노이즈가 된다.</p>
+  </section>
+
+  <section>
+    <h2>실험 전에 통제할 것</h2>
+    <p class="sublede">10분 로그아웃 규칙보다 이쪽이 측정 정확도에 훨씬 크게 작용한다.</p>
+
+    <ol class="checks">
+      <li><b>탭 하나만 사용</b><span>두 탭에서 서로 다른 job을 동시에 열면 이벤트 스트림이 섞여 job 귀속이 틀어진다. 지금 설계에서 가장 큰 실제 위험이다.</span></li>
+      <li><b>계정 공유 금지</b><span>실작업 시간은 <code>user_id</code>로 집계된다. 한 계정을 둘이 쓰면 분리가 불가능하다.</span></li>
+      <li><b>실험 직전 파이프라인 재확인</b><span>덤프로 확인된 것은 2026-08-24까지다. 그 이후 vector → ClickHouse 구간이 끊겼을 가능성은 배제할 수 없다. 시작 전날 <code>send:working_time</code>의 last_seen을 한 번 본다.</span></li>
+      <li><b>로그아웃은 버튼을 눌러야 기록된다</b><span>토큰 인증이라 탭만 닫으면 <code>logout:user</code>가 남지 않는다. 짝이 없는 로그인은 그 자체로 미준수 신호이므로, 이 동작을 그대로 두고 해석에 쓴다.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>실행</h2>
+    <p class="sublede">쿼리 세트는 <code>docs/analytics/annotation-time-metrics.sql</code>에 있다. 파라미터는 project id 또는 job id 하나뿐이다.</p>
+    <pre><span class="c"># 0번 섹션(뷰 생성)을 한 번 실행한 뒤, 1·2번을 task마다 반복</span>
+docker exec cvat_clickhouse_everex clickhouse-client \
+  --user user --password user \
+  --param_proj=<span class="c">&lt;project_id&gt;</span> --query "&lt;쿼리&gt;"</pre>
+    <p>실험의 task 1/2/3은 CVAT project 3개에 대응한다. 각 project id로 1번과 2번 쿼리를 돌리면 목표 테이블 두 개가 그대로 채워진다. 단축율은 세 결과를 받아 계산한다.</p>
+    <p>개별 job을 파고들 때는 3b번 섹션의 뷰를 쓴다. <code>--param_job=&lt;job_id&gt;</code> 하나면 된다.</p>
+    <pre>docker exec cvat_clickhouse_everex clickhouse-client \
+  --user user --password user --param_job=<span class="c">74137</span> \
+  --query "SELECT * FROM cvat.job_rounds(job = {job:UInt64})"</pre>
+  </section>
+
+  <footer>
+    <span>ImageLab · CVAT Everex fork</span>
+    <span>검증: prod dump 2026-08-24</span>
+    <span>docs/analytics/annotation-time-metrics.sql</span>
+  </footer>
+
+</div>
