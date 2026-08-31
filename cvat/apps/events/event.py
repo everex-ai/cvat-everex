@@ -23,7 +23,7 @@ class EventScopes:
         "organization": ["create", "update", "delete"],
         "membership": ["create", "update", "delete"],
         "invitation": ["create", "delete"],
-        "user": ["create", "update", "delete"],
+        "user": ["create", "update", "delete", "login", "logout"],
         "cloudstorage": ["create", "update", "delete"],
         "issue": ["create", "update", "delete"],
         "comment": ["create", "update", "delete"],

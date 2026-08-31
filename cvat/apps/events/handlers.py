@@ -432,6 +432,20 @@ def handle_delete(scope, instance, store_in_deletion_cache=False, **kwargs):
     )
 
 
+def handle_user_auth(scope: str, user) -> None:
+    # Authentication happens outside of any resource context,
+    # so only the acting user is recorded.
+    record_server_event(
+        scope=scope,
+        request_info=request_info(),
+        count=1,
+        obj_id=getattr(user, "id", None),
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "username", None),
+        user_email=getattr(user, "email", None) or None,
+    )
+
+
 def handle_annotations_change(instance: Job, annotations, action, **kwargs):
     def filter_data(data):
         return {
